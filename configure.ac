@@ -2499,7 +2499,8 @@ if test "x$openssl" = "xyes" ; then
 		]], [[
 		exit(EVP_aes_128_ctr() == NULL ||
 		    EVP_aes_192_cbc() == NULL ||
-		    EVP_aes_256_cbc() == NULL);
+		    EVP_aes_256_cbc() == NULL ||
+		    evp_aes_ctr_mt() == NULL);
 		]])],
 		[
 			AC_MSG_RESULT([yes])
