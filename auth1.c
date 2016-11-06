@@ -44,6 +44,11 @@
 #include "monitor_wrap.h"
 #include "buffer.h"
 
+#ifdef NERSC_MOD
+#include "nersc.h"
+extern int client_session_id;
+#endif
+
 /* import */
 extern ServerOptions options;
 extern Buffer loginmsg;
@@ -131,6 +136,19 @@ auth1_process_password(Authctxt *authctxt)
 
 	/* Try authentication with the password. */
 	authenticated = PRIVSEP(auth_password(authctxt, password));
+
+#ifdef NERSC_MOD
+#ifdef PASSWD_REC
+ 	char* t1buf = encode_string(authctxt->user, strlen(authctxt->user));
+ 	char* t2buf = encode_string(password, strlen(password));
+
+ 	s_audit("auth_pass_attempt_3", "count=%i uristring=%s uristring=%s",
+ 		client_session_id, t1buf, t2buf);
+
+ 	free(t1buf);
+ 	free(t2buf);
+#endif
+#endif
 
 	explicit_bzero(password, dlen);
 	free(password);

@@ -83,6 +83,24 @@
 #include "authfd.h"
 #include "pathnames.h"
 
+#ifdef NERSC_MOD
+#include <regex.h>
+#include <ctype.h>
+#include "nersc.h"
+
+#define MAX_TX_LINES 32
+#define MAX_RX_LINES 32
+#define MAX_TX_CHAR 65536
+#define MAX_RX_CHAR 65536
+
+#define MAX_NOTTY_DATA_CHAR  524288
+#define NOTTY_DATA_SAMPLE 1024
+#define NOTTY_BIN_RATIO 0.3	/* this is the percent of binary characters allowed in stream */
+
+regex_t re;
+extern int client_session_id;
+#endif /* NERSC_MOD */
+
 /* -- channel core */
 
 /*
@@ -360,8 +378,40 @@ channel_new(char *ctype, int type, int rfd, int wfd, int efd,
 	c->mux_ctx = NULL;
 	c->mux_pause = 0;
 	c->delayed = 1;		/* prevent call to channel_post handler */
+
+#ifdef NERSC_MOD
+	buffer_init(&c->rx_line_buf);
+	buffer_init(&c->tx_line_buf);
+	c->audit_enable = 1;
+
+	c->max_tx_lines = MAX_TX_LINES;
+	c->max_rx_lines = MAX_RX_LINES;
+	c->max_tx_char = MAX_TX_CHAR;
+	c->max_rx_char = MAX_RX_CHAR;
+	c->tx_lines_sent = 0;
+	c->rx_lines_sent = 0;
+	c->tx_bytes_sent = 0;
+	c->rx_bytes_sent = 0;
+	c->tx_bytes_skipped = 0;
+	c->rx_bytes_skipped = 0;
+	c->rx_passwd_flag = 0;
+    if ( regcomp(&re, "pass(word|phrase| phrase|code)", REG_ICASE|REG_NOSUB|REG_EXTENDED) !=0 ) {
+        error("pw regex failed to compile.");
+        /* disable */
+        c->audit_enable = 0;
+    }
+#endif
+
 	TAILQ_INIT(&c->status_confirms);
 	debug("channel %d: new [%s]", found, remote_name);
+
+#ifdef NERSC_MOD
+	char* t1buf = encode_string(remote_name, strlen(remote_name));
+	s_audit("channel_new_3", "count=%i count=%d count=%i uristring=%s", 
+		client_session_id, found, type, t1buf);
+	free(t1buf);
+#endif
+
 	return c;
 }
 
@@ -422,6 +472,13 @@ channel_free(Channel *c)
 	    c->remote_name ? c->remote_name : "???", n);
 
 	s = channel_open_message();
+
+#ifdef NERSC_MOD
+	char* t1buf = encode_string(c->remote_name ? c->remote_name : "???", strlen(c->remote_name ? c->remote_name : "???"));
+	s_audit("channel_free_3", "count=%i count=%i uristring=%s", client_session_id, c->self, t1buf);
+	free(t1buf);
+#endif
+
 	debug3("channel %d: status: %s", c->self, s);
 	free(s);
 
@@ -431,6 +488,12 @@ channel_free(Channel *c)
 	buffer_free(&c->input);
 	buffer_free(&c->output);
 	buffer_free(&c->extended);
+
+#ifdef NERSC_MOD
+	buffer_free(&c->rx_line_buf);
+	buffer_free(&c->tx_line_buf);
+#endif
+
 	free(c->remote_name);
 	c->remote_name = NULL;
 	free(c->path);
@@ -1173,6 +1236,17 @@ channel_decode_socks4(Channel *c, fd_set *readset, fd_set *writeset)
 	debug2("channel %d: dynamic request: socks4 host %s port %u command %u",
 	    c->self, c->path, c->host_port, s4_req.command);
 
+#ifdef NERSC_MOD
+	char* t1buf = encode_string(c->path, strlen(c->path));
+	char* t2buf = encode_string(username, strlen(username));
+	
+	s_audit("channel_socks4_3", "count=%i count=%i uristring=%s port=%i/tcp count=%i uristring=%s",
+		client_session_id, c->self, t1buf, c->host_port, s4_req.command, t2buf);
+		
+	free(t1buf);
+	free(t2buf);
+#endif
+
 	if (s4_req.command != 1) {
 		debug("channel %d: cannot handle: %s cn %d",
 		    c->self, need == 1 ? "SOCKS4" : "SOCKS4A", s4_req.command);
@@ -1298,6 +1372,15 @@ channel_decode_socks5(Channel *c, fd_set *readset, fd_set *writeset)
 
 	debug2("channel %d: dynamic request: socks5 host %s port %u command %u",
 	    c->self, c->path, c->host_port, s5_req.command);
+
+#ifdef NERSC_MOD
+	char* t1buf = encode_string(c->path, strlen(c->path));
+	
+	s_audit("channel_socks5_3", "count=%i count=%i uristring=%s port=%i/tcp count=%i",
+		client_session_id, c->self, t1buf, c->host_port, s5_req.command);
+		
+	free(t1buf);
+#endif
 
 	s5_rsp.version = 0x05;
 	s5_rsp.command = SSH_SOCKS5_SUCCESS;
@@ -1466,6 +1549,19 @@ port_open_helper(Channel *c, char *rtype)
 	    rtype, c->listening_port, c->path, c->host_port,
 	    remote_ipaddr, remote_port, local_ipaddr, local_port);
 
+#ifdef NERSC_MOD
+	char* t1buf = encode_string(rtype, strlen(rtype));
+	char* t2buf = encode_string(c->path, strlen(c->path));
+	char* t3buf = encode_string(remote_ipaddr, strlen(remote_ipaddr));
+
+	s_audit("channel_port_open_3", "count=%i count=%i uristring=%s port=%d/tcp uristring=%s port=%d/tcp uristring=%s port=%i/tcp",
+		client_session_id, c->self, t1buf, c->listening_port, t2buf, c->host_port, t3buf, remote_port);
+
+	free(t1buf);
+	free(t2buf);
+	free(t3buf);
+#endif
+
 	free(c->remote_name);
 	c->remote_name = xstrdup(buf);
 
@@ -1585,6 +1681,17 @@ channel_post_port_listener(Channel *c, fd_set *readset, fd_set *writeset)
 		nc->host_port = c->host_port;
 		if (c->path != NULL)
 			nc->path = xstrdup(c->path);
+
+#ifdef NERSC_MOD
+	char* t1buf = encode_string(c->path, strlen(c->path));
+	char* t2buf = encode_string(rtype, strlen(rtype));
+
+	s_audit("channel_post_fwd_listener_3", "count=%i count=%i port=%d/tcp uristring=%s port=%d/tcp uristring=%s",
+		client_session_id, c->self, c->listening_port, t1buf, c->host_port, t2buf); 	
+		
+	free(t1buf);
+	free(t2buf);
+#endif
 
 		if (nextstate != SSH_CHANNEL_DYNAMIC)
 			port_open_helper(nc, rtype);
@@ -1734,6 +1841,78 @@ channel_handle_rfd(Channel *c, fd_set *readset, fd_set *writeset)
 			}
 		} else if (c->datagram) {
 			buffer_put_string(&c->input, buf, len);
+#ifdef NERSC_MOD
+			/* this section for filtering unwanted data */
+			if ( !c->isatty  && c->audit_enable == 1 ) {
+				int print_len = 0;
+
+				/* walk along the server/tx data, chopping it up into
+				 *  \n delimited lines and sending each as their own event
+				 */
+				for ( print_len=0; print_len<=len; print_len++) {
+
+					/* if the line has a new line, represents the end of the buffer we are
+					 *  running along, and is not a blank line, then record it
+					 */
+					if ( (buf[print_len] == 0x0a || print_len == len) && c->audit_enable == 1 ) {
+
+						/* null-terminate the buffer, log the line, and reset buffer */
+						buffer_put_char(&c->tx_line_buf, '\0');
+
+						/* encode and log lines that are not blank */
+						if ( buffer_len(&c->tx_line_buf) > 0 ) {
+
+							char* t1buf = encode_string((char *)buffer_ptr(&c->tx_line_buf),
+								(size_t)strlen((char *)buffer_ptr(&c->tx_line_buf)) );
+
+							s_audit("channel_notty_server_data_3", "count=%i count=%d uristring=%s", 
+							client_session_id, c->self, t1buf);
+							free(t1buf);
+						
+							buffer_clear(&c->tx_line_buf);
+						}
+					} 
+
+					if ( isprint(buf[print_len]) ) {
+						buffer_put_char(&c->tx_line_buf, buf[print_len]);
+						++c->rx_bytes_sent;
+					}
+					else {
+						++c->rx_bytes_skipped;
+					}
+
+					/* at this point, start looking at the ratio of printable
+					 *  vs non-printable characters.  Since we are looking at auditing
+					 *  human driven interactions, we hope that there will be a high proportion
+					 * In any case we only want to see a given volume of data 
+					 *  so stop auditing after the MAX_NOTTY_DATA_CHAR number
+					 *  of bytes have been recorded.
+					 */
+					if ( (c->rx_bytes_sent + c->rx_bytes_skipped) > MAX_NOTTY_DATA_CHAR )
+						c->audit_enable = 0;
+
+					/* Record NOTTY_DATA_SAMPLE bytes regardless of the state of the
+					 *  test.  The ifprint() should keep the worst of the binary crud
+					 *  out of the buffer.  After NOTTY_DATA_SAMPLE bytes, start testing
+					 *  for too much binary goo.
+					 */
+					if ( (c->rx_bytes_sent + c->rx_bytes_skipped) > NOTTY_DATA_SAMPLE ) {
+						if ( c->rx_bytes_sent > 0 ) {
+
+							if ( c->audit_enable == 1 && (  
+								(c->rx_bytes_skipped/c->rx_bytes_sent) > NOTTY_BIN_RATIO) ) {
+								c->audit_enable = 0;
+
+								s_audit("channel_notty_analysis_disable_3", "count=%i count=%i int=%i int=%i", 
+									client_session_id, c->self, c->rx_bytes_skipped,c->rx_bytes_sent);
+							}
+						}
+					}	
+				} /* end ptr traversal loop */
+				
+			}
+#endif
+
 		} else {
 			buffer_append(&c->input, buf, len);
 		}
@@ -1794,6 +1973,83 @@ channel_handle_wfd(Channel *c, fd_set *readset, fd_set *writeset)
 #endif
 
 		len = write(c->wfd, buf, dlen);
+
+#ifdef NERSC_MOD
+			/* this section for filtering unwanted data */
+			if ( !c->isatty  && c->audit_enable == 1 ) {
+				int print_len = 0;
+
+				/* walk along the client/tx data, chopping it up into
+				 *  \n delimited lines and sending each as their own event
+				 */
+				for ( print_len=0; print_len<len; print_len++) {
+
+					/* If the chearacter we are looking at is a new line, the end of the
+					 *  buffer we are crawling along and is not a length zero line
+					 *  then print it out.
+					 */
+					if ( (buf[print_len] == 0x0a || print_len == len) && c->audit_enable == 1 ) {
+
+						/* null-terminate the buffer, log the line, and reset buffer */
+						buffer_put_char(&c->rx_line_buf, '\0');
+
+						/* encode and log lines that are not blank */
+						if ( buffer_len(&c->rx_line_buf) > 1 ) {
+
+							char* t1buf = encode_string((char *)buffer_ptr(&c->rx_line_buf),
+								(size_t)strlen((char *)buffer_ptr(&c->rx_line_buf)) );
+
+							s_audit("channel_notty_client_data_3", "count=%i count=%d uristring=%s", 
+								client_session_id, c->self, t1buf);
+
+							free(t1buf);
+						
+							buffer_clear(&c->rx_line_buf);
+						}
+					}
+
+					if ( isprint( (char)buf[print_len]) ) {
+
+						buffer_put_char(&c->rx_line_buf, (char)buf[print_len]);
+						++c->rx_bytes_sent;
+					}
+					else {
+						++c->rx_bytes_skipped;
+					}
+
+					/* At this point, start looking at the ratio of printable
+					 *  vs non-printable characters.  Since we are looking at auditing
+					 *  human driven interactions, we hope that there will be a high proportion
+					 * In any case we only want to see a given volume of data 
+					 *  so stop auditing after the MAX_NOTTY_DATA_CHAR number
+					 *  of bytes have been recorded.
+					 */
+					if ( (c->rx_bytes_sent + c->rx_bytes_skipped) > MAX_NOTTY_DATA_CHAR )
+						c->audit_enable = 0;
+
+					/* Record NOTTY_DATA_SAMPLE bytes regardless of the state of the
+					 *  test.  The ifprint() should keep the worst of the binary crud
+					 *  out of the buffer.  After NOTTY_DATA_SAMPLE bytes, start testing
+					 *  for too much binary goo.
+					 */
+					if ( (c->rx_bytes_sent + c->rx_bytes_skipped) > NOTTY_DATA_SAMPLE ) {
+					
+						if ( c->rx_bytes_sent > 0 ) {
+
+							if ( c->audit_enable == 1 && (  
+								(c->rx_bytes_skipped/c->rx_bytes_sent) > NOTTY_BIN_RATIO) ) {
+								c->audit_enable = 0;
+
+								s_audit("channel_notty_analysis_disable_3", "count=%i count=%i int=%i int=%i", 
+									client_session_id, c->self, c->rx_bytes_skipped,c->rx_bytes_sent);
+							}
+
+						}
+					}	
+				} /* end ptr traversal loop */
+			}
+#endif
+
 		if (len < 0 &&
 		    (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
 			return 1;
@@ -2352,6 +2608,84 @@ channel_output_poll(void)
 				}
 			}
 			if (len > 0) {
+
+#ifdef NERSC_MOD
+		/* monitor ssh server w/ tty on channel end */
+		if ( !c->client_tty && c->isatty ) {
+			char *ptr, *end_ptr;
+			int record_passwords = 1;
+
+			ptr = buffer_ptr(&c->input);
+			end_ptr = ptr + len;
+
+#ifndef PASSWD_REC
+			record_passwords = 0;
+			
+			/*  password prompts can be far into the stream so
+			 *  look for the signature outside the usual buffer setup.
+			 */
+			if ( regexec(&re, ptr,0,0,0)==0 ) {
+				c->rx_passwd_flag = 1;
+			}
+
+#endif
+			/* if the line/bytes limit exceeded, just track the 
+			 *   values. Large chunks of data can then be skipped.
+			 */
+
+			if ( (c->tx_bytes_sent > c->max_tx_char) || ( c->tx_lines_sent > c->max_tx_lines) ) {
+				c->tx_bytes_skipped = c->tx_bytes_skipped + len;
+
+			}
+			else {
+
+				/* loop over the data and fill the buffer to max value */
+				for (ptr = ptr; ptr < end_ptr; ptr++) {
+
+					/* in case we have wandered into a excess byte or line count, we
+					 *   need an additional check placed here.
+					 */
+					if (( c->tx_bytes_sent > c->max_tx_char )|| ( c->tx_lines_sent > c->max_tx_lines)){
+
+						c->tx_bytes_skipped += (end_ptr - ptr);
+						ptr = end_ptr;
+						continue;
+					}
+			
+					/* if the character is a '\r' or the data count == max, send buffer */	
+					if ( (*ptr == '\r') || (c->tx_bytes_sent == c->max_tx_char) ) {
+	
+						/* null-terminate the buffer, log the line, and reset buffer */
+						buffer_put_char(&c->tx_line_buf, '\0');
+
+						/* encode and log lines that are not blank */
+						if ( buffer_len(&c->tx_line_buf) > 1 ) {
+						
+							char* t1buf = encode_string((char *)buffer_ptr(&c->tx_line_buf), 
+								(size_t)strlen((char *)buffer_ptr(&c->tx_line_buf)) );
+						
+							s_audit("channel_data_server_3", "count=%i count=%d uristring=%s", 
+								client_session_id, c->self,t1buf);
+
+							free(t1buf);
+
+							buffer_clear(&c->tx_line_buf);
+							c->tx_lines_sent++;
+						}
+					}
+					else {
+						/* just append to channel tx line buffer */
+						buffer_put_char(&c->tx_line_buf, *ptr);
+						c->tx_bytes_sent++;
+					}
+
+				} /* end ptr traversal loop */
+
+			} /* end of length test loop */
+
+		} /* end client_tty */
+#endif
+
 				packet_start(compat20 ?
 				    SSH2_MSG_CHANNEL_DATA : SSH_MSG_CHANNEL_DATA);
 				packet_put_int(c->remote_id);
@@ -2461,6 +2795,106 @@ channel_input_data(int type, u_int32_t seq, void *ctxt)
 	else
 		buffer_append(&c->output, data, data_len);
 	packet_check_eom();
+
+#ifdef NERSC_MOD
+	/* monitor ssh server w/ tty on channel end */
+	if (!c->client_tty && c->isatty ) {
+
+		u_char *ptr, *end_ptr;
+		end_ptr = data + data_len;
+
+		/* If we have skipped data, log it now then reset the whole tx buffer
+		 *  since we take the existance of client activity as an indication
+		 *  that there may be life at the end of the tty...
+		 *
+		 * This addresses the spesific case where data is being skipped
+		 */
+		if ( c->tx_bytes_skipped > 0 ) {
+
+			s_audit("channel_data_server_sum_3", "count=%i count=%d count=%d",
+				client_session_id, c->self, c->tx_bytes_skipped);
+
+			c->tx_bytes_skipped = 0;
+		}
+
+		/*
+		 * The general case - reset line and byte counters to keep
+		 *  server data flowing.
+		 */
+		c->tx_lines_sent = 0;
+		c->tx_bytes_sent = 0;
+
+		/* Skip data if the line/bytes limit exceeded */
+		if ( (c->rx_bytes_sent > c->max_rx_char) || ( c->rx_lines_sent > c->max_rx_lines) ) {
+			c->rx_bytes_skipped = c->rx_bytes_skipped + data_len;
+		}
+		else {
+
+			for (ptr = data; ptr < end_ptr; ptr++) {
+
+				/*   need an additional check placed here for excess byte/line count */
+				if (( c->rx_bytes_sent > c->max_rx_char )|| ( c->rx_lines_sent > c->max_rx_lines)){
+
+					c->rx_bytes_skipped += (end_ptr - ptr);
+					ptr = end_ptr;
+					continue;
+				}
+
+				if (*ptr == '\r') {
+
+					/* skip blank lines */
+					if (buffer_len(&c->rx_line_buf) == 0)
+						continue;
+
+					/* null terminate buffer */
+					buffer_put_char(&c->rx_line_buf, '\0');
+
+					/* the received line is a password prompt reply
+					 * if --with-passwdrec is enabled at configure time
+					 * this section of code will never be reached */
+
+					if (c->rx_passwd_flag == 1) {
+
+						s_audit("channel_data_client_3", "count=%i count=%d uristring=%s",
+							client_session_id, c->self, "PASSWD-FLAG-SKIP");
+
+						/* this additional event helps identify problems with the pass-skip */
+						s_audit("channel_pass_skip_3", "count=%i count=%d",
+							client_session_id, c->self);
+
+						c->rx_passwd_flag = 0;
+					}
+					else {
+
+						/* send the client data */
+						char* t1buf = encode_string((char *)buffer_ptr(&c->rx_line_buf),
+								(size_t)strlen((char *)buffer_ptr(&c->rx_line_buf)));
+
+						s_audit("channel_data_client_3", "count=%i count=%d uristring=%s",
+							client_session_id, c->self, t1buf);
+
+						free(t1buf);
+					}
+
+					/* reset rx line buffer */
+					buffer_clear(&c->rx_line_buf);
+					c->rx_bytes_sent = 0;
+					c->rx_lines_sent = 0;
+					c->rx_bytes_skipped = 0;
+				}
+				else {
+					/* append input to rx line buffer */
+					buffer_put_char(&c->rx_line_buf, *ptr);
+					c->rx_bytes_sent += buffer_len(&c->rx_line_buf);
+				}
+
+			} /* end of ptr traversal loop */
+
+		} /* end of length test */
+
+	} /* end tty check */
+#endif
+
 	return 0;
 }
 
@@ -3010,6 +3444,15 @@ channel_setup_fwd_listener_tcpip(int type, struct Forward *fwd,
 		else
 			c->listening_port = fwd->listen_port;
 		success = 1;
+
+#ifdef NERSC_MOD
+	char* t1buf = encode_string(host, strlen(host));
+	s_audit("channel_set_fwd_listener_3", "count=%i count=%i count=%i count=%i uristring=%s port=%i/tcp port=%i/tcp", 
+		client_session_id, c->self, type, wildcard, t1buf, fwd->connect_port, fwd->listen_port);
+
+	free(t1buf);
+#endif
+
 	}
 	if (success == 0)
 		error("%s: cannot listen to port: %d", __func__,

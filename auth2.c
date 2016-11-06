@@ -57,6 +57,11 @@
 #endif
 #include "monitor_wrap.h"
 
+#ifdef NERSC_MOD
+#include "nersc.h"
+extern int client_session_id;
+#endif
+
 /* import */
 extern ServerOptions options;
 extern u_char *session_id2;

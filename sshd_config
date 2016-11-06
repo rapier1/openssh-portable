@@ -139,6 +139,9 @@ Subsystem	sftp	/usr/libexec/sftp-server
 # allow the use of the none cipher
 #NoneEnabled no
 
+# Disable sshd auditing
+#AuditDisabled no
+
 # Example of overriding settings on a per-user basis
 #Match User anoncvs
 #	X11Forwarding no

@@ -118,13 +118,14 @@ static const struct sock_filter preauth_insns[] = {
 #ifdef __NR_newfstatat
 	SC_DENY(newfstatat, EACCES),
 #endif
+#ifndef NERSC_MOD
 #ifdef __NR_stat
 	SC_DENY(stat, EACCES),
 #endif
 #ifdef __NR_stat64
 	SC_DENY(stat64, EACCES),
 #endif
-
+#endif
 	/* Syscalls to permit */
 #ifdef __NR_brk
 	SC_ALLOW(brk),
@@ -135,14 +136,17 @@ static const struct sock_filter preauth_insns[] = {
 #ifdef __NR_close
 	SC_ALLOW(close),
 #endif
+#ifdef __NR_getpeername /* not defined on archs that go via socketcall(2) */
+	SC_ALLOW(getpeername),
+#endif
+#ifdef __NR_getpgid
+	SC_ALLOW(getpgid),
+#endif
 #ifdef __NR_exit
 	SC_ALLOW(exit),
 #endif
 #ifdef __NR_exit_group
 	SC_ALLOW(exit_group),
-#endif
-#ifdef __NR_getpeername /* not defined on archs that go via socketcall(2) */
-	SC_ALLOW(getpeername),
 #endif
 #ifdef __NR_getpgid
 	SC_ALLOW(getpgid),
@@ -183,6 +187,15 @@ static const struct sock_filter preauth_insns[] = {
 #ifdef __NR_read
 	SC_ALLOW(read),
 #endif
+	SC_ALLOW(exit_group),
+
+#ifdef NERSC_MOD
+	SC_ALLOW(sendto),
+	SC_ALLOW(stat),
+	SC_ALLOW(socket),
+	SC_ALLOW(connect),
+#endif
+
 #ifdef __NR_rt_sigprocmask
 	SC_ALLOW(rt_sigprocmask),
 #endif

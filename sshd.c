@@ -135,6 +135,15 @@
 #define REEXEC_CONFIG_PASS_FD		(STDERR_FILENO + 3)
 #define REEXEC_MIN_FREE_FD		(STDERR_FILENO + 4)
 
+#ifdef NERSC_MOD
+#include "nersc.h"
+extern char n_ntop[NI_MAXHOST];
+extern char n_port[NI_MAXHOST];
+extern int client_session_id;
+extern char interface_list[256];
+extern int audit_disabled = 0;
+#endif
+
 extern char *__progname;
 
 /* Server configuration options. */
@@ -309,6 +318,20 @@ sighup_handler(int sig)
 static void
 sighup_restart(void)
 {
+
+#ifdef NERSC_MOD
+
+	struct addrinfo *ai;
+	char ntop[NI_MAXHOST], strport[NI_MAXSERV];
+
+	ai = options.listen_addrs;
+	
+	if ( getnameinfo(ai->ai_addr, ai->ai_addrlen,ntop, sizeof(ntop), strport, 
+			sizeof(strport),NI_NUMERICHOST|NI_NUMERICSERV) == 0) {
+		s_audit("sshd_restart_3", "addr=%s  port=%s/tcp", ntop, strport);
+	}
+#endif
+
 	logit("Received SIGHUP; restarting.");
 	platform_pre_restart();
 	close_listen_socks();
@@ -1225,6 +1248,15 @@ server_listen(void)
 			fatal("listen on [%s]:%s: %.100s",
 			    ntop, strport, strerror(errno));
 		logit("Server listening on %s port %s.", ntop, strport);
+
+#ifdef NERSC_MOD
+		/* set using (pid,address,port) */
+		set_server_id(getpid(),ntop,(int)options.ports[0]);
+
+		s_audit("sshd_start_3", "addr=%s port=%s/tcp", ntop, strport);
+		client_session_id=0;
+		set_interface_list();
+#endif
 	}
 	freeaddrinfo(options.listen_addrs);
 
@@ -1239,6 +1271,16 @@ server_listen(void)
 static void
 server_accept_loop(int *sock_in, int *sock_out, int *newsock, int *config_s)
 {
+
+#ifdef NERSC_MOD
+	struct addrinfo *ai;
+	char ntop[NI_MAXHOST], strport[NI_MAXSERV];
+
+	ai = options.listen_addrs;
+	struct timeval l_tv;
+	l_tv.tv_sec = 60;
+	l_tv.tv_usec = 0;
+#endif
 	fd_set *fdset;
 	int i, j, ret, maxfd;
 	int key_used = 0, startups = 0;
@@ -1277,7 +1319,27 @@ server_accept_loop(int *sock_in, int *sock_out, int *newsock, int *config_s)
 				FD_SET(startup_pipes[i], fdset);
 
 		/* Wait in select until there is a connection. */
+
+#ifndef NERSC_MOD
 		ret = select(maxfd+1, fdset, NULL, NULL, NULL);
+#endif
+
+#ifdef NERSC_MOD
+
+		/*  If a connection happens, we break from the loop with some ammount of
+		 *  data flagged in the return bits of select.  On error we see ret < 0. 
+		 *
+		 *  This needs to be tested wqith great enthusiasm since there might be corner
+		 *  cases of ret == 0 that I am not aware of
+		 */
+			l_tv.tv_sec = 60;
+			l_tv.tv_usec = 0;
+
+			s_audit("sshd_server_heartbeat_3", "count=%i", ret);
+
+			ret = select(maxfd+1, fdset, NULL, NULL, &l_tv);
+#endif
+
 		if (ret < 0 && errno != EINTR)
 			error("select: %.100s", strerror(errno));
 		if (received_sigterm) {
@@ -1286,6 +1348,13 @@ server_accept_loop(int *sock_in, int *sock_out, int *newsock, int *config_s)
 			close_listen_socks();
 			if (options.pid_file != NULL)
 				unlink(options.pid_file);
+
+#ifdef NERSC_MOD
+			if (  getnameinfo(ai->ai_addr, ai->ai_addrlen,ntop, sizeof(ntop), strport,
+					sizeof(strport),NI_NUMERICHOST|NI_NUMERICSERV) == 0) {
+				s_audit("sshd_exit_3", "addr=%s  port=%s/tcp", ntop, strport);
+			}
+#endif
 			exit(received_sigterm == SIGTERM ? 0 : 255);
 		}
 		if (key_used && key_do_regen) {
@@ -1761,6 +1830,20 @@ main(int ac, char **av)
 		exit(1);
 	}
 
+#ifdef NERSC_MOD
+	/* here we are setting the values for the server id which lives in nersc.c */
+	getnameinfo(options.listen_addrs->ai_addr, options.listen_addrs->ai_addrlen,
+		n_ntop, sizeof(n_ntop), n_port,sizeof(n_port),
+		NI_NUMERICHOST|NI_NUMERICSERV); 
+
+	/* To avoid linking issues, we just set a variable here based on the running configuration
+	 *   not my favorite
+	 */
+	if ( options.audit_disabled )
+		audit_disabled = 1;
+
+#endif
+
 	debug("sshd version %s, %s", SSH_VERSION,
 #ifdef WITH_OPENSSL
 	    SSLeay_version(SSLEAY_VERSION)
@@ -2158,6 +2241,23 @@ main(int ac, char **av)
 	 */
 	remote_ip = get_remote_ipaddr();
 
+#ifdef NERSC_MOD
+
+	/* here we were setting client_session_id to the current pid
+	 *  but will now use a positive random number 
+	 *  to use as a tracking id for the remainder of the
+	 *  session.  c_s_i is defined in nersc.c
+	 */
+	client_session_id = abs(arc4random() );
+
+	char* t1buf = encode_string(interface_list, strlen(interface_list));
+
+	s_audit("sshd_connection_start_3", "count=%i uristring=%s addr=%s port=%i/tcp addr=%s port=%s/tcp count=%ld", 
+		client_session_id, interface_list, remote_ip, remote_port, n_ntop, n_port);
+
+	free(t1buf);
+#endif
+
 #ifdef SSH_AUDIT_EVENTS
 	audit_connection_from(remote_ip, remote_port);
 #endif
@@ -2307,6 +2407,10 @@ main(int ac, char **av)
 
 	do_authenticated(authctxt);
 
+#ifdef NERSC_MOD
+	s_audit("sshd_connection_end_3", "count=%i addr=%s port=%i/tcp addr=%s port=%s/tcp",
+		 client_session_id, remote_ip, remote_port, n_ntop, n_port);
+#endif
 	/* The connection has been terminated. */
 	packet_get_bytes(&ibytes, &obytes);
 	verbose("Transferred: sent %llu, received %llu bytes",
@@ -2587,11 +2691,11 @@ do_ssh2_kex(void)
 	struct kex *kex;
 	int r;
 
-	if (options.none_enabled == 1)
-		debug("WARNING: None cipher enabled");
+        if (options.none_enabled == 1)
+                debug ("WARNING: None cipher enabled"); 
 
 	myproposal[PROPOSAL_KEX_ALGS] = compat_kex_proposal(
-	    options.kex_algorithms);
+            options.kex_algorithms);
 	myproposal[PROPOSAL_ENC_ALGS_CTOS] = compat_cipher_proposal(
 	    options.ciphers);
 	myproposal[PROPOSAL_ENC_ALGS_STOC] = compat_cipher_proposal(

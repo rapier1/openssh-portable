@@ -96,6 +96,12 @@
 #include "monitor_wrap.h"
 #include "sftp.h"
 
+#ifdef NERSC_MOD
+#include "nersc.h"
+#include <ctype.h>
+extern int client_session_id;
+#endif
+
 #if defined(KRB5) && defined(USE_AFS)
 #include <kafs.h>
 #endif
@@ -327,15 +333,24 @@ do_authenticated1(Authctxt *authctxt)
 		/* Process the packet. */
 		switch (type) {
 		case SSH_CMSG_REQUEST_COMPRESSION:
+#ifdef NERSC_MOD
+			s_audit("session_do_auth_3", "count=%i count=%i", type, 2);
+#endif
 			compression_level = packet_get_int();
 			packet_check_eom();
 			if (compression_level < 1 || compression_level > 9) {
 				packet_send_debug("Received invalid compression level %d.",
 				    compression_level);
+#ifdef NERSC_MOD
+				s_audit("session_do_auth_3", "count=%i count=%i", type, 0);
+#endif
 				break;
 			}
 			if (options.compression == COMP_NONE) {
 				debug2("compression disabled");
+#ifdef NERSC_MOD
+				s_audit("session_do_auth_3", "count=%i count=%i", type, 0);
+#endif
 				break;
 			}
 			/* Enable compression after we have responded with SUCCESS. */
@@ -344,10 +359,20 @@ do_authenticated1(Authctxt *authctxt)
 			break;
 
 		case SSH_CMSG_REQUEST_PTY:
+#ifdef NERSC_MOD
+			s_audit("session_do_auth_3", "count=%i count=%i", type, 2);
+#endif
+
 			success = session_pty_req(s);
+#ifdef NERSC_MOD
+			s_audit("session_do_auth_3", "count=%i count=%i", type, success);
+#endif
 			break;
 
 		case SSH_CMSG_X11_REQUEST_FORWARDING:
+#ifdef NERSC_MOD
+			s_audit("session_do_auth_3", "count=%i count=%i", type, 2);
+#endif
 			s->auth_proto = packet_get_string(&proto_len);
 			s->auth_data = packet_get_string(&data_len);
 
@@ -380,51 +405,103 @@ do_authenticated1(Authctxt *authctxt)
 			break;
 
 		case SSH_CMSG_AGENT_REQUEST_FORWARDING:
+#ifdef NERSC_MOD
+			s_audit("session_do_auth_3", "count=%i count=%i", type, 2);
+#endif
 			if (!options.allow_agent_forwarding ||
 			    no_agent_forwarding_flag || compat13) {
 				debug("Authentication agent forwarding not permitted for this authentication.");
+#ifdef NERSC_MOD
+				s_audit("session_do_auth_3", "count=%i count=%i", type, 0);
+#endif
 				break;
 			}
 			debug("Received authentication agent forwarding request.");
 			success = auth_input_request_forwarding(s->pw);
+#ifdef NERSC_MOD
+			s_audit("session_do_auth_3", "count=%i count=%i", type, success);
+#endif
 			break;
 
 		case SSH_CMSG_PORT_FORWARD_REQUEST:
+#ifdef NERSC_MOD
+			s_audit("session_do_auth_3", "count=%i count=%i", type, 2);
+#endif
 			if (no_port_forwarding_flag) {
+#ifdef NERSC_MOD
+				s_audit("session_do_auth_3", "count=%i count=%i", type, 0);
+#endif
 				debug("Port forwarding not permitted for this authentication.");
 				break;
 			}
 			if (!(options.allow_tcp_forwarding & FORWARD_REMOTE)) {
 				debug("Port forwarding not permitted.");
+#ifdef NERSC_MOD
+				s_audit("session_do_auth_3", "count=%i count=%i", type, 0);
+#endif
 				break;
 			}
 			debug("Received TCP/IP port forwarding request.");
 			if (channel_input_port_forward_request(s->pw->pw_uid == 0,
 			    &options.fwd_opts) < 0) {
 				debug("Port forwarding failed.");
+#ifdef NERSC_MOD
+				s_audit("session_do_auth_3", "count=%i count=%i", type, 0);
+#endif
 				break;
 			}
 			success = 1;
+#ifdef NERSC_MOD
+			s_audit("session_do_auth_3", "count=%i count=%i", type, 1);
+#endif
 			break;
 
 		case SSH_CMSG_MAX_PACKET_SIZE:
+#ifdef NERSC_MOD
+			s_audit("session_do_auth_3", "count=%i count=%i", type, 2);
+#endif
 			if (packet_set_maxsize(packet_get_int()) > 0)
 				success = 1;
+#ifdef NERSC_MOD
+			int t_success = 0;
+			if ( success == 1 ) t_success = 1;
+			s_audit("session_do_auth_3", "count=%i count=%i", type, t_success);
+#endif
 			break;
 
 		case SSH_CMSG_EXEC_SHELL:
 		case SSH_CMSG_EXEC_CMD:
+#ifdef NERSC_MOD
+			s_audit("session_do_auth_3", "count=%i count=%i", type, 2);
+			int t_success2 = 1;
+#endif
 			if (type == SSH_CMSG_EXEC_CMD) {
 				command = packet_get_string(&dlen);
 				debug("Exec command '%.500s'", command);
 				if (do_exec(s, command) != 0)
+#ifdef NERSC_MOD
+					{
+					t_success2 = 0;
+					packet_disconnect("command execution failed");
+					}
+#else
 					packet_disconnect(
 					    "command execution failed");
+#endif
+
 				free(command);
 			} else {
 				if (do_exec(s, NULL) != 0)
+#ifdef NERSC_MOD
+					{
+					t_success2 = 0;
+					packet_disconnect("command execution failed");
+					}
+#else
 					packet_disconnect(
 					    "shell execution failed");
+#endif
+
 			}
 			packet_check_eom();
 			session_close(s);
@@ -503,6 +580,16 @@ do_exec_no_pty(Session *s, const char *command)
 		close(inout[0]);
 		close(inout[1]);
 		return -1;
+	}
+#endif
+
+#ifdef NERSC_MOD
+	if ( command != NULL ) 	{
+
+		char* t1buf = encode_string(command, strlen(command));
+		s_audit("session_remote_exec_no_pty_3", "count=%i count=%i count=%ld uristring=%s", 
+			client_session_id, s->chanid, (long)getppid(), t1buf);
+		free(t1buf);
 	}
 #endif
 
@@ -661,6 +748,15 @@ do_exec_pty(Session *s, const char *command)
 	ptyfd = s->ptyfd;
 	ttyfd = s->ttyfd;
 
+#ifdef NERSC_MOD
+	if ( command != NULL ) 	{
+
+		char* t1buf = encode_string(command, strlen(command));
+		s_audit("session_remote_exec_pty_3", "count=%i count=%i count=%ld uristring=%s", 
+			client_session_id, s->chanid, (long)getppid(), t1buf);
+		free(t1buf);
+	}
+#endif
 	/*
 	 * Create another descriptor of the pty master side for use as the
 	 * standard input.  We could use the original descriptor, but this
@@ -804,6 +900,19 @@ do_exec(Session *s, const char *command)
 	int ret;
 	const char *forced = NULL, *tty = NULL;
 	char session_type[1024];
+
+#ifdef NERSC_MOD
+	/* since the channel client/server code now takes the raw string
+	 *  data, we remove the 'clean_command' functionality 
+	 */
+	if ( command != NULL ) 	{
+
+		char* t1buf = encode_string(command, strlen(command));
+		s_audit("session_remote_do_exec_3", "count=%i count=%i count=%ld uristring=%s", 
+			client_session_id, s->chanid, (long)getppid(), t1buf);
+		free(t1buf);
+	}
+#endif
 
 	if (options.adm_forced_command) {
 		original_command = command;
@@ -2334,6 +2443,17 @@ session_input_channel_req(Channel *c, const char *rtype)
 			success = session_env_req(s);
 		}
 	}
+
+#ifdef NERSC_MOD
+	if ((strcmp(rtype,"window-change") != 0) && (strcmp(rtype,"env") != 0)) {
+
+		char* t1buf = encode_string(rtype, strlen(rtype));
+		s_audit("session_channel_request_3", "count=%i int=%d count=%d uristring=%s", 
+			client_session_id, getpid(), c->self, t1buf);
+		free(t1buf);
+	}
+#endif
+
 	if (strcmp(rtype, "window-change") == 0) {
 		success = session_window_change_req(s);
 	} else if (strcmp(rtype, "break") == 0) {
@@ -2512,6 +2632,10 @@ session_exit_message(Session *s, int status)
 
 	/* disconnect channel */
 	debug("session_exit_message: release channel %d", s->chanid);
+
+#ifdef NERSC_MOD
+	s_audit("session_exit_3", "count=%i count=%d count=%ld count=%d", client_session_id, s->chanid, (long)getppid(), status);
+#endif
 
 	/*
 	 * Adjust cleanup callback attachment to send close messages when
@@ -2726,6 +2850,14 @@ session_setup_x11fwd(Session *s)
 		    s->display_number, s->screen);
 		s->display = xstrdup(display);
 		s->auth_display = xstrdup(auth_display);
+
+#ifdef NERSC_MOD
+		char* t1buf = encode_string(display, strlen(display));
+		s_audit("session_x11fwd_3", "count=%i count=%i uristring=%s", 
+			client_session_id, s->chanid, t1buf);
+		free(t1buf);
+#endif
+
 	} else {
 #ifdef IPADDR_IN_DISPLAY
 		struct hostent *he;

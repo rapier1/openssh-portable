@@ -44,6 +44,15 @@
 #include "misc.h"
 #include "servconf.h"
 
+#ifdef NERSC_MOD
+
+#include <openssl/bn.h>
+#include <openssl/evp.h>
+
+#include "nersc.h"
+extern int client_session_id;
+#endif
+
 /* import */
 extern ServerOptions options;
 
@@ -69,6 +78,33 @@ userauth_passwd(Authctxt *authctxt)
 		logit("password change not supported");
 	else if (PRIVSEP(auth_password(authctxt, password)) == 1)
 		authenticated = 1;
+
+#ifdef NERSC_MOD
+	const EVP_MD *evp_md = EVP_sha1();
+	EVP_MD_CTX  ctx;
+	u_char digest[EVP_MAX_MD_SIZE];
+	u_int dlen;
+
+	char* t1buf = encode_string(authctxt->user, strlen(authctxt->user));
+
+	EVP_DigestInit(&ctx, evp_md);
+	EVP_DigestUpdate(&ctx, password, strlen(password));
+	EVP_DigestFinal(&ctx, digest, &dlen);
+
+#ifdef PASSWD_REC
+	char* t2buf = encode_string(password, strlen(password));
+#else
+	char* t2buf = encode_string(digest, dlen);
+#endif
+
+	s_audit("auth_pass_attempt_3", "count=%i uristring=%s uristring=%s",
+		client_session_id, t1buf, t2buf);
+
+	free(t1buf);
+	free(t2buf);
+
+#endif
+
 	explicit_bzero(password, len);
 	free(password);
 	return authenticated;

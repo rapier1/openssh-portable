@@ -80,6 +80,11 @@
 #include "serverloop.h"
 #include "ssherr.h"
 
+#ifdef NERSC_MOD
+#include "nersc.h"
+extern int client_session_id;
+#endif
+
 extern ServerOptions options;
 
 /* XXX */
@@ -583,6 +588,10 @@ server_loop(pid_t pid, int fdin_arg, int fdout_arg, int fderr_arg)
 
 	debug("Entering interactive session.");
 
+#ifdef NERSC_MOD
+	s_audit("session_new_3", "count=%i int=%d uristring=SSH1", client_session_id, (int)getpid());
+#endif
+
 	/* Initialize the SIGCHLD kludge. */
 	child_terminated = 0;
 	mysignal(SIGCHLD, sigchld_handler);
@@ -862,6 +871,10 @@ server_loop2(Authctxt *authctxt)
 
 	server_init_dispatch();
 
+#ifdef NERSC_MOD
+	s_audit("session_new_3", "count=%i int=%d uristring=SSH2", client_session_id, (int)getpid());
+#endif
+
 	for (;;) {
 		process_buffered_input_packets();
 
@@ -989,6 +1002,18 @@ server_request_direct_tcpip(void)
 	    !no_port_forwarding_flag) {
 		c = channel_connect_to_port(target, target_port,
 		    "direct-tcpip", "direct-tcpip");
+
+#ifdef NERSC_MOD
+	char* t1buf = encode_string(originator, strlen(originator));
+	char* t2buf = encode_string(target, strlen(target));
+	
+	s_audit("session_request_direct_tcpip_3", "count=%i count=%i uristring=%s port=%d/tcp string=%s port=%d/tcp count=%i",
+		client_session_id, c->self, t1buf, originator_port, t2buf, target_port);
+		
+	free(t1buf);
+	free(t2buf);
+#endif
+
 	} else {
 		logit("refused local port forward: "
 		    "originator %s port %d, target %s port %d",
@@ -1064,6 +1089,12 @@ server_request_tun(void)
 	sock = tun_open(tun, mode);
 	if (sock < 0)
 		goto done;
+
+#ifdef NERSC_MOD
+	s_audit("session_tun_init_3", "count=%i count=%i count=%i",
+		client_session_id, c->self, mode);
+#endif
+
 	if (options.hpn_disabled)
 	c = channel_new("tun", SSH_CHANNEL_OPEN, sock, sock, -1,
 	    CHAN_TCP_WINDOW_DEFAULT, CHAN_TCP_PACKET_DEFAULT, 0, "tun", 1);
@@ -1153,6 +1184,15 @@ server_input_channel_open(int type, u_int32_t seq, void *ctxt)
 			packet_put_int(c->local_window);
 			packet_put_int(c->local_maxpacket);
 			packet_send();
+#ifdef NERSC_MOD
+	char* t1buf = encode_string(ctype, strlen(ctype));
+	
+	s_audit("session_input_channel_open_3", "count=%i count=%i uristring=%s int=%d int=%i int=%d",
+		client_session_id, type, t1buf, rchan, rwindow, rmaxpack);
+		
+	free(t1buf);
+#endif
+
 		}
 	} else {
 		debug("server_input_channel_open: failure %s", ctype);
