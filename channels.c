@@ -191,7 +191,7 @@ static void channel_connect_ctx_free(struct channel_connect *);
 
 
 static int hpn_disabled = 0;
-static int hpn_buffer_size = 2 * 1024 * 1024;
+static int hpn_buffer_size = 4 * 1024 * 1024;
 
 /* -- channel core */
 
