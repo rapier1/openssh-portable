@@ -48,8 +48,8 @@ geared towards 10GigE transcontinental connections.
 
 Conditions: HPNBufferSize NOT Set, TCPRcvBufPoll disabled, TCPRcvBuf NOT Set
 HPN Buffer Size = TCP receive buffer value.
-Users on non-autotuning systesm should disable TCPRcvBufPoll in the
-ssh_cofig and sshd_config
+Users on non-autotuning systems should disable TCPRcvBufPoll in the
+ssh_config and sshd_config
 
 Conditions: HPNBufferSize SET, TCPRcvBufPoll disabled, TCPRcvBuf NOT Set
 HPN Buffer Size = minmum of TCP receive buffer and HPNBufferSize.
