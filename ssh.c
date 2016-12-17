@@ -1924,7 +1924,7 @@ hpn_options_init(void)
 
 	if (tty_flag)
 		options.hpn_buffer_size = CHAN_SES_WINDOW_DEFAULT;
-	else
+	else if (options.hpn_buffer_size <= 0) /* use value from config file if present */
 		options.hpn_buffer_size = 2 * 1024 * 1024;
 
 	if (datafellows & SSH_BUG_LARGEWINDOW) {
