@@ -2009,7 +2009,7 @@ hpn_options_init(void)
 	if (tty_flag)
 		options.hpn_buffer_size = CHAN_SES_WINDOW_DEFAULT;
 	else
-		options.hpn_buffer_size = 2 * 1024 * 1024;
+		options.hpn_buffer_size = 4 * 1024 * 1024;
 
 	if (datafellows & SSH_BUG_LARGEWINDOW) {
 		debug("HPN to Non-HPN connection");

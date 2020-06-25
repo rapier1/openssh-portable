@@ -221,7 +221,7 @@ static int rdynamic_connect_finish(struct ssh *, Channel *);
 static void channel_handler_init(struct ssh_channels *sc);
 
 static int hpn_disabled = 0;
-static int hpn_buffer_size = 2 * 1024 * 1024;
+static int hpn_buffer_size = 4 * 1024 * 1024;
 
 /* -- channel core */
 
