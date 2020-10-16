@@ -1762,13 +1762,6 @@ main(int ac, char **av)
 		free(old_ciphers);
 	}
 
-	if (options.nonemac_enabled == 1) {
-		char *old_macs = options.macs;
-		
-		xasprintf(&options.macs, "%s,none", old_macs);
-		free(old_macs);
-	}
-	
 	/* challenge-response is implemented via keyboard interactive */
 	if (options.challenge_response_authentication)
 		options.kbd_interactive_authentication = 1;
@@ -2327,25 +2320,6 @@ main(int ac, char **av)
 	/* Try to send all our hostkeys to the client */
 	notify_hostkeys(ssh);
 
-#ifdef WITH_OPENSSL
-	if (options.disable_multithreaded == 0) {
-		/* if we are using aes-ctr there can be issues in either a fork or sandbox
-		 * so the initial aes-ctr is defined to point ot the original single process
-		 * evp. After authentication we'll be past the fork and the sandboxed privsep
-		 * so we repoint the define to the multithreaded evp. To start the threads we
-		 * then force a rekey
-		 */
-		const void *cc = ssh_packet_get_send_context(the_active_state);
-		
-		/* only rekey if necessary. If we don't do this gcm mode cipher breaks */
-		if (strstr(cipher_ctx_name(cc), "ctr")) {
-			debug("Single to Multithreaded CTR cipher swap - server request");
-			cipher_reset_multithreaded();
-			packet_request_rekeying();
-		}
-	}
-#endif
-
 	/* Start session. */
 
 #ifdef WITH_OPENSSL
@@ -2438,8 +2412,6 @@ do_ssh2_kex(struct ssh *ssh)
 
 	if (options.none_enabled == 1)
 		debug("WARNING: None cipher enabled");
-	if (options.nonemac_enabled == 1)
-		debug("WARNING: None MAC enabled");
 	
 	myproposal[PROPOSAL_KEX_ALGS] = compat_kex_proposal(
 	    options.kex_algorithms);

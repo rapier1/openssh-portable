@@ -190,7 +190,6 @@ initialize_server_options(ServerOptions *options)
 	options->hpn_disabled = -1;
 	options->hpn_buffer_size = -1;
 	options->none_enabled = -1;
-	options->nonemac_enabled = -1;
 	options->disable_multithreaded = -1;
 	options->max_rcv_buf = -1;
 	options->ip_qos_interactive = -1;
@@ -453,8 +452,6 @@ fill_default_server_options(ServerOptions *options)
 		options->permit_tun = SSH_TUNMODE_NO;
 	if (options->none_enabled == -1)
 		options->none_enabled = 0;
-	if (options->nonemac_enabled == -1)
-		options->nonemac_enabled = 0;
 	if (options->disable_multithreaded == -1)
 		options->disable_multithreaded = 0;
 	if (options->hpn_disabled == -1)
@@ -567,7 +564,7 @@ typedef enum {
 	sPasswordAuthentication, sKbdInteractiveAuthentication,
 	sListenAddress, sAddressFamily,
 	sPrintMotd, sPrintLastLog, sIgnoreRhosts,
-	sNoneEnabled, sNoneMacEnabled,
+	sNoneEnabled,
 	sDisableMTAES,
 	sTcpRcvBufPoll, sHPNDisabled, sHPNBufferSize,
 	sMaxRcvBuf,
@@ -735,7 +732,6 @@ static struct {
 	{ "tcprcvbufpoll", sTcpRcvBufPoll, SSHCFG_ALL },
 	{ "noneenabled", sNoneEnabled, SSHCFG_ALL },
 	{ "disableMTAES", sDisableMTAES, SSHCFG_ALL },
-	{ "nonemacenabled", sNoneMacEnabled, SSHCFG_ALL },
 	{ "maxrcvbuf", sMaxRcvBuf, SSHCFG_ALL },
 	{ "kexalgorithms", sKexAlgorithms, SSHCFG_GLOBAL },
 	{ "include", sInclude, SSHCFG_ALL },
@@ -1560,10 +1556,6 @@ process_server_config_line_depth(ServerOptions *options, char *line,
 
 	case sNoneEnabled:
 		intptr = &options->none_enabled;
-		goto parse_flag;
-		
-	case sNoneMacEnabled:
-		intptr = &options->nonemac_enabled;
 		goto parse_flag;
 		
 	case sMaxRcvBuf:
