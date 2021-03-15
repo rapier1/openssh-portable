@@ -122,6 +122,7 @@
 #include "misc.h"
 #include "progressmeter.h"
 #include "utf8.h"
+#include <openssl/md5.h>
 
 extern char *__progname;
 
@@ -142,7 +143,7 @@ struct bwlimit bwlimit;
 char *curfile;
 
 /* This is set to non-zero to enable verbose mode. */
-int verbose_mode = 0;
+int verbose_mode = 1;
 
 /* This is set to zero if the progressmeter is not desired. */
 int showprogress = 1;
@@ -196,6 +197,8 @@ do_local_cmd(arglist *a)
 	int status;
 	pid_t pid;
 
+	fprintf(stderr, "In do_local_cmd\n");
+	
 	if (a->num == 0)
 		fatal("do_local_cmd: no arguments");
 
@@ -241,7 +244,7 @@ int
 do_cmd(char *host, char *remuser, int port, char *cmd, int *fdin, int *fdout)
 {
 	int pin[2], pout[2], reserved[2];
-
+	
 	if (verbose_mode)
 		fmprintf(stderr,
 		    "Executing: program %s host %s, user %s, command %s\n",
@@ -295,10 +298,8 @@ do_cmd(char *host, char *remuser, int port, char *cmd, int *fdin, int *fdout)
 		addargs(&args, "--");
 		addargs(&args, "%s", host);
 		addargs(&args, "%s", cmd);
-
 		execvp(ssh_program, args.list);
 		perror(ssh_program);
-		exit(1);
 	} else if (do_cmd_pid == -1) {
 		fatal("fork: %s", strerror(errno));
 	}
@@ -395,6 +396,7 @@ void source(int, char *[]);
 void tolocal(int, char *[]);
 void toremote(int, char *[]);
 void usage(void);
+//void calculate_md5sum(char *[], char );
 
 int
 main(int argc, char **argv)
@@ -425,7 +427,7 @@ main(int argc, char **argv)
 	args.list = remote_remote_args.list = NULL;
 	addargs(&args, "%s", ssh_program);
 	addargs(&args, "-x");
-	addargs(&args, "-oPermitLocalCommand=no");
+addargs(&args, "-oPermitLocalCommand=no");
 	addargs(&args, "-oClearAllForwardings=yes");
 	addargs(&args, "-oRemoteCommand=none");
 	addargs(&args, "-oRequestTTY=no");
@@ -616,6 +618,8 @@ do_times(int fd, int verb, const struct stat *sb)
 	/* strlen(2^64) == 20; strlen(10^6) == 7 */
 	char buf[(20 + 7 + 2) * 2 + 2];
 
+	fprintf(stderr, "In do_times\n");
+	
 	(void)snprintf(buf, sizeof(buf), "T%llu 0 %llu 0\n",
 	    (unsigned long long) (sb->st_mtime < 0 ? 0 : sb->st_mtime),
 	    (unsigned long long) (sb->st_atime < 0 ? 0 : sb->st_atime));
@@ -634,6 +638,8 @@ parse_scp_uri(const char *uri, char **userp, char **hostp, int *portp,
 {
 	int r;
 
+	fprintf (stderr, "In parse_scp_uri\n");
+	
 	r = parse_uri("scp", uri, userp, hostp, portp, pathp);
 	if (r == 0 && *pathp == NULL)
 		*pathp = xstrdup(".");
@@ -896,7 +902,9 @@ toremote(int argc, char **argv)
 	arglist alist;
 	int i, r;
 	u_int j;
-
+	
+	fprintf (stderr, "In toremote\n");
+	
 	memset(&alist, '\0', sizeof(alist));
 	alist.list = NULL;
 
@@ -987,6 +995,7 @@ toremote(int argc, char **argv)
 			if (do_local_cmd(&alist) != 0)
 				errs = 1;
 		} else {	/* local to remote */
+			fprintf (stderr,"Local to remote (toremote)\n");
 			if (remin == -1) {
 				xasprintf(&bp, "%s -t %s%s", cmd,
 				    *targ == '-' ? "-- " : "", targ);
@@ -1016,6 +1025,8 @@ tolocal(int argc, char **argv)
 	arglist alist;
 	int i, r, sport = -1;
 
+	fprintf (stderr,"In tolocal\n");
+	
 	memset(&alist, '\0', sizeof(alist));
 	alist.list = NULL;
 
@@ -1067,6 +1078,42 @@ tolocal(int argc, char **argv)
 	free(src);
 }
 
+void calculate_md5sum(char *filename, char *output, off_t length)
+{
+	//open file for calculating md5sum
+	FILE *file_ptr;
+	file_ptr = fopen(filename, "r");
+	if (file_ptr==NULL)
+	{
+		perror("Error opening file");
+		fflush(stdout);
+		// need to put exception handling here
+	}
+	
+	int n;
+	MD5_CTX c;
+	char buf[512];
+	ssize_t bytes;
+	unsigned char out[MD5_DIGEST_LENGTH];
+	char tmp[3];
+	off_t sum = 0; 
+	
+	MD5_Init(&c);
+	do
+	{
+		bytes=fread(buf, 1, 512, file_ptr);
+		MD5_Update(&c, buf, bytes);
+		sum += bytes;
+	}while(sum < length);
+	
+	MD5_Final(out, &c);
+	
+	for(n=0; n<MD5_DIGEST_LENGTH; n++) {
+		snprintf(tmp, 3, "%02x", out[n]);
+		strcat(output, tmp);
+	}
+}
+
 void
 source(int argc, char **argv)
 {
@@ -1078,7 +1125,10 @@ source(int argc, char **argv)
 	int fd = -1, haderr, indx;
 	char *last, *name, buf[PATH_MAX + 128], encname[PATH_MAX];
 	int len;
-
+	char md5sum[32];
+	
+	fprintf (stderr, "In source\n");
+	
 	for (indx = 0; indx < argc; ++indx) {
 		name = argv[indx];
 		statbytes = 0;
@@ -1099,6 +1149,12 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 			run_err("%s: %s", name, "Negative file size");
 			goto next;
 		}
+		// only calulate md5sum if we are in resume mode
+		calculate_md5sum(name, md5sum, stb.st_size);
+		// debug -cjr
+		fprintf(stderr, "Name is %s and hash %s\n", name, md5sum);
+		// debug -cjr
+		fprintf (stderr,"size of %s is %ld\n", name, stb.st_size);
 		unset_nonblock(fd);
 		switch (stb.st_mode & S_IFMT) {
 		case S_IFREG:
@@ -1123,9 +1179,12 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 				goto next;
 		}
 #define	FILEMODEMASK	(S_ISUID|S_ISGID|S_IRWXU|S_IRWXG|S_IRWXO)
-		snprintf(buf, sizeof buf, "C%04o %lld %s\n",
+		snprintf(buf, sizeof buf, "C%04o %lld %s %s\n",
 		    (u_int) (stb.st_mode & FILEMODEMASK),
-		    (long long)stb.st_size, last);
+			 (long long)stb.st_size, last, md5sum);
+		// How about we add a hash of the file along with the filemode?
+		// once we have that we can actually use that to figure out the
+		// what we need to send. 
 		if (verbose_mode)
 			fmprintf(stderr, "Sending file modes: %s", buf);
 		(void) atomicio(vwrite, remout, buf, strlen(buf));
@@ -1186,6 +1245,8 @@ rsource(char *name, struct stat *statp)
 	struct dirent *dp;
 	char *last, *vect[1], path[PATH_MAX];
 
+	fprintf (stderr, "In rsource\n");
+	
 	if (!(dirp = opendir(name))) {
 		run_err("%s: %s", name, strerror(errno));
 		return;
@@ -1237,7 +1298,7 @@ void
 sink(int argc, char **argv, const char *src)
 {
 	static BUF buffer;
-	struct stat stb;
+	struct stat stb, cpstat, npstat;
 	BUF *bp;
 	off_t i;
 	size_t j, count;
@@ -1255,6 +1316,8 @@ sink(int argc, char **argv, const char *src)
 #define	mtime	tv[1]
 #define	SCREWUP(str)	{ why = str; goto screwup; }
 
+	fprintf (stderr, "In sink with %s\n", src);
+	
 	if (TYPE_OVERFLOW(time_t, 0) || TYPE_OVERFLOW(off_t, 0))
 		SCREWUP("Unexpected off_t/time_t size");
 
@@ -1269,10 +1332,13 @@ sink(int argc, char **argv, const char *src)
 	targ = *argv;
 	if (targetshouldbedirectory)
 		verifydir(targ);
-
+	
+	
 	(void) atomicio(vwrite, remout, "", 1);
 	if (stat(targ, &stb) == 0 && S_ISDIR(stb.st_mode))
 		targisdir = 1;
+	fprintf(stderr, "Target is %s with a size of %ld\n", targ, stb.st_size);
+
 	if (src != NULL && !iamrecursive && !Tflag) {
 		/*
 		 * Prepare to try to restrict incoming filenames to match
@@ -1385,6 +1451,7 @@ sink(int argc, char **argv, const char *src)
 			run_err("error: unexpected filename: %s", cp);
 			exit(1);
 		}
+		fprintf(stderr, "cp is %s\n", cp);
 		if (npatterns > 0) {
 			for (n = 0; n < npatterns; n++) {
 				if (fnmatch(patterns[n], cp, 0) == 0)
@@ -1442,6 +1509,11 @@ sink(int argc, char **argv, const char *src)
 		}
 		omode = mode;
 		mode |= S_IWUSR;
+		stat(cp, &cpstat);
+		stat(np, &npstat);
+		fprintf (stderr, "CP is %s(%ld) NP is %s(%ld)\n", cp, cpstat.st_size, np, npstat.st_size);
+		
+		
 		if ((ofd = open(np, O_WRONLY|O_CREAT, mode)) == -1) {
 bad:			run_err("%s: %s", np, strerror(errno));
 			continue;
@@ -1559,6 +1631,8 @@ response(void)
 {
 	char ch, *cp, resp, rbuf[2048], visbuf[2048];
 
+	fprintf (stderr, "In response\n");
+	
 	if (atomicio(read, remin, &resp, sizeof(resp)) != sizeof(resp))
 		lostconn(0);
 
