@@ -566,6 +566,10 @@ addargs(&args, "-oPermitLocalCommand=no");
 	remin = remout = -1;
 	do_cmd_pid = -1;
 	/* Command to be executed on remote system using "ssh". */
+	/* TODO: problem is that the command uses the first scp in the users
+	 * path. This isn't necessarily going to be the 'right' scp to use.
+	 * I'm not sure how to resolve this without hard coding it in
+	 * maybe a user config option? */
 	(void) snprintf(cmd, sizeof cmd, "scp%s%s%s%s",
 	    verbose_mode ? " -v" : "",
 	    iamrecursive ? " -r" : "", pflag ? " -p" : "",
@@ -1181,7 +1185,7 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 #define	FILEMODEMASK	(S_ISUID|S_ISGID|S_IRWXU|S_IRWXG|S_IRWXO)
 		snprintf(buf, sizeof buf, "C%04o %lld %s %s\n",
 		    (u_int) (stb.st_mode & FILEMODEMASK),
-			 (long long)stb.st_size, last, md5sum);
+			 (long long)stb.st_size, md5sum, last);
 		// How about we add a hash of the file along with the filemode?
 		// once we have that we can actually use that to figure out the
 		// what we need to send. 
@@ -1307,11 +1311,13 @@ sink(int argc, char **argv, const char *src)
 	off_t size, statbytes;
 	unsigned long long ull;
 	int setimes, targisdir, wrerr;
-	char ch, *cp, *np, *targ, *why, *vect[1], buf[16384], visbuf[16384];
+	char ch, *cp, *np, *targ, *why, *vect[1], buf[16384], outbuf[16384], visbuf[16384];
 	char **patterns = NULL;
 	size_t n, npatterns = 0;
 	struct timeval tv[2];
-
+	char remote_md5sum[33];
+	char local_md5sum[33];
+	
 #define	atime	tv[0]
 #define	mtime	tv[1]
 #define	SCREWUP(str)	{ why = str; goto screwup; }
@@ -1333,7 +1339,7 @@ sink(int argc, char **argv, const char *src)
 	if (targetshouldbedirectory)
 		verifydir(targ);
 	
-	
+	fprintf (stderr, "Sending null to remout.\n"); 
 	(void) atomicio(vwrite, remout, "", 1);
 	if (stat(targ, &stb) == 0 && S_ISDIR(stb.st_mode))
 		targisdir = 1;
@@ -1348,6 +1354,7 @@ sink(int argc, char **argv, const char *src)
 			fatal_f("could not expand pattern");
 	}
 	for (first = 1;; first = 0) {
+		fprintf(stderr, "1: buf is %s\n", buf);
 		cp = buf;
 		if (atomicio(read, remin, cp, 1) != 1)
 			goto done;
@@ -1375,6 +1382,7 @@ sink(int argc, char **argv, const char *src)
 			continue;
 		}
 		if (buf[0] == 'E') {
+			fprintf (stderr, "2: Sending null to remout.\n"); 
 			(void) atomicio(vwrite, remout, "", 1);
 			goto done;
 		}
@@ -1382,6 +1390,8 @@ sink(int argc, char **argv, const char *src)
 			*--cp = 0;
 
 		cp = buf;
+		fprintf(stderr, "2: buf is %s\n", buf);
+		
 		if (*cp == 'T') {
 			setimes++;
 			cp++;
@@ -1409,6 +1419,7 @@ sink(int argc, char **argv, const char *src)
 			if (!cp || *cp++ != '\0' || atime.tv_usec < 0 ||
 			    atime.tv_usec > 999999)
 				SCREWUP("atime.usec not delimited");
+			fprintf (stderr, "3: Sending null to remout.\n"); 
 			(void) atomicio(vwrite, remout, "", 1);
 			continue;
 		}
@@ -1427,6 +1438,9 @@ sink(int argc, char **argv, const char *src)
 			SCREWUP("expected control record");
 		}
 		mode = 0;
+		fprintf(stderr, "3: buf is %s\n", buf);
+		fprintf(stderr, "1: cp is %s\n", cp);
+
 		for (++cp; cp < buf + 5; cp++) {
 			if (*cp < '0' || *cp > '7')
 				SCREWUP("bad mode");
@@ -1437,6 +1451,9 @@ sink(int argc, char **argv, const char *src)
 		if (*cp++ != ' ')
 			SCREWUP("mode not delimited");
 
+		fprintf(stderr, "2: cp is %s\n", cp);
+
+
 		if (!isdigit((unsigned char)*cp))
 			SCREWUP("size not present");
 		ull = strtoull(cp, &cp, 10);
@@ -1446,6 +1463,17 @@ sink(int argc, char **argv, const char *src)
 			SCREWUP("size out of range");
 		size = (off_t)ull;
 
+		fprintf(stderr, "3: cp is %s\n", cp);
+		
+		for (int i = 0; i < 32; i++) {
+			strncat (remote_md5sum, cp++, 1);
+		}
+		fprintf (stderr, "%s\n", remote_md5sum);
+		if (!cp || *cp++ != ' ')
+			SCREWUP("hash not delimited");
+
+		fprintf(stderr, "4: cp is %s\n", cp);
+		
 		if (*cp == '\0' || strchr(cp, '/') != NULL ||
 		    strcmp(cp, ".") == 0 || strcmp(cp, "..") == 0) {
 			run_err("error: unexpected filename: %s", cp);
@@ -1511,13 +1539,45 @@ sink(int argc, char **argv, const char *src)
 		mode |= S_IWUSR;
 		stat(cp, &cpstat);
 		stat(np, &npstat);
-		fprintf (stderr, "CP is %s(%ld) NP is %s(%ld)\n", cp, cpstat.st_size, np, npstat.st_size);
+		/* this file is already here do we need to move it? */
+		if (size == npstat.st_size) {
+			calculate_md5sum(np, local_md5sum, npstat.st_size);
+			if (strcmp(local_md5sum,remote_md5sum) == 0) {
+				/* we can skip this file if we want to. Do we?
+				 * if so how? */
+				fprintf(stderr, "Files are the same\n");
+			}
+		}
+		if (npstat.st_size < size) {
+			fprintf (stderr, "%s is smaller than %s\n", np, cp);
+			calculate_md5sum(np, local_md5sum, npstat.st_size);
+#define	FILEMODEMASK	(S_ISUID|S_ISGID|S_IRWXU|S_IRWXG|S_IRWXO)
+			snprintf(outbuf, sizeof outbuf, "C%04o %lld %s %s\n",
+				 (u_int) (npstat.st_mode & FILEMODEMASK),
+				 (long long)npstat.st_size, local_md5sum, cp);
+			fprintf (stderr, "new buf is %s", outbuf);
+			fmprintf(stderr, "Sending new file modes: %s", outbuf);
+			fprintf (stderr, "Sending outbuf to remout.\n"); 
+			// this doesn't work yet as I don't think the remote is expecting it.
+			// it causes the connection to drop immediately. 
+			//(void) atomicio(vwrite, remout, outbuf, strlen(outbuf));
+			//fprintf(stderr, "response is %d\n", response());
+			//if (response() < 0)
+			//	fprintf (stderr, "error received\n");
+			/*now we have to send np's length and hash to the other end 
+			 * if the computed hashes match then we seek to np's length in
+			 * file and append to np starting from there */
+			
+		}
+			
+		fprintf (stderr, "CP is %s(%ld) NP is %s(%ld)\n", cp, size, np, npstat.st_size);
 		
 		
 		if ((ofd = open(np, O_WRONLY|O_CREAT, mode)) == -1) {
 bad:			run_err("%s: %s", np, strerror(errno));
 			continue;
 		}
+		fprintf (stderr, "4: Sending null to remout.\n"); 
 		(void) atomicio(vwrite, remout, "", 1);
 		if ((bp = allocbuf(&buffer, ofd, COPY_BUFLEN)) == NULL) {
 			(void) close(ofd);
@@ -1610,8 +1670,9 @@ bad:			run_err("%s: %s", np, strerror(errno));
 			}
 		}
 		/* If no error was noted then signal success for this file */
-		if (note_err(NULL) == 0)
-			(void) atomicio(vwrite, remout, "", 1);
+		if (note_err(NULL) == 0) {
+			fprintf (stderr, "5: Sending null to remout.\n"); 
+			(void) atomicio(vwrite, remout, "", 1); }
 	}
 done:
 	for (n = 0; n < npatterns; n++)
@@ -1631,12 +1692,13 @@ response(void)
 {
 	char ch, *cp, resp, rbuf[2048], visbuf[2048];
 
-	fprintf (stderr, "In response\n");
-	
 	if (atomicio(read, remin, &resp, sizeof(resp)) != sizeof(resp))
 		lostconn(0);
 
 	cp = rbuf;
+	fprintf (stderr, "In response is %d and %s\n", resp, cp);
+	
+
 	switch (resp) {
 	case 0:		/* ok */
 		return (0);
