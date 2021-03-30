@@ -1343,7 +1343,7 @@ sink(int argc, char **argv, const char *src)
 	size_t j, count;
 	int amt, exists, first, ofd;
 	mode_t mode, omode, mask;
-	off_t size, statbytes, in_size;
+	off_t size, statbytes, in_size, xfer_size;
 	unsigned long long ull;
 	int setimes, targisdir, wrerr;
 	char ch, *cp, *np, *np_tmp, *targ, *why, *vect[1], buf[16384], visbuf[16384];
@@ -1358,6 +1358,8 @@ sink(int argc, char **argv, const char *src)
 	}
 	char tmpbuf[128];
 	char outbuf[128];
+	char match;
+	int bad_match_flag = 0;
 	
 #define	atime	tv[0]
 #define	mtime	tv[1]
@@ -1594,6 +1596,7 @@ sink(int argc, char **argv, const char *src)
 		omode = mode;
 		mode |= S_IWUSR;
 		stat(cp, &cpstat);
+		xfer_size = size;
 		if (resume_flag) {
 			fprintf(stderr, "np is %s\n", np);
 			if (stat(np, &npstat) == -1) {
@@ -1606,7 +1609,7 @@ sink(int argc, char **argv, const char *src)
 			 * following block fails. See on 0 byte files the hashes will
 			 * always match and the file won't be created even though it should
 			 */
-			if (size == npstat.st_size && (npstat.st_size > 0)) { 
+			if (xfer_size == npstat.st_size && (npstat.st_size > 0)) { 
 				calculate_md5sum(np, local_md5sum, npstat.st_size);
 				if (strcmp(local_md5sum,remote_md5sum) == 0) {
 					/* we can skip this file if we want to. Do we?
@@ -1623,7 +1626,7 @@ sink(int argc, char **argv, const char *src)
 			}
 			/* if npstat.st_size is 0 then the local file doesn't exist and 
 			 * we have to move it. Since we are in resume mode treat it as a resume */
-			if (npstat.st_size < size || (npstat.st_size == 0)) {
+			if (npstat.st_size < xfer_size || (npstat.st_size == 0)) {
 				char rand_string[9];
 				fprintf (stderr, "LOCAL %s is smaller than %s\n", np, cp);
 				calculate_md5sum(np, local_md5sum, npstat.st_size);
@@ -1646,7 +1649,7 @@ sink(int argc, char **argv, const char *src)
 				//if (debug_response("Position 1") < 0)
 				//	fprintf (stderr, "error received\n");
 				fprintf(stderr, "LOCAL New size: %ld, size: %ld, st_size: %ld\n", size - npstat.st_size, size, npstat.st_size);
-				size = size - npstat.st_size;
+				xfer_size = size - npstat.st_size;
 				resume_flag = 1;
 				np_tmp = strdup(np);
 				/* We should have a random component to avoid clobbering a 
@@ -1654,10 +1657,37 @@ sink(int argc, char **argv, const char *src)
 				rand_str(rand_string, 8);
 				strcat(np, rand_string);
 				fprintf(stderr, "LOCAL Will concat %s to %s after xfer\n", np, np_tmp);
+			} else if (npstat.st_size > size) {
+			/* the target file is larger than the source. 
+			 * so we need to overwrite it */
+				fprintf(stderr, "LOCAL target(%ld) is larger than source(%ld)!\n", npstat.st_size, size);
+				snprintf(tmpbuf, sizeof outbuf, "C%04o %lld %s",
+					 (u_int) (npstat.st_mode & FILEMODEMASK),
+					 (long long)npstat.st_size, local_md5sum);
+				snprintf(outbuf, 128, "%-127s", tmpbuf); 
+				(void) atomicio(vwrite, remout, outbuf, strlen(outbuf));
+				bad_match_flag = 0;
 			}
 		}
 
 		fprintf (stderr, "LOCAL CP is %s(%ld) NP is %s(%ld)\n", cp, size, np, npstat.st_size);
+
+		fprintf (stderr, "4: Sending null to remout.\n"); 
+		(void) atomicio(vwrite, remout, "", 1);
+
+		/* the remote is always going to send a match status */
+		(void) atomicio(read, remin, &match, 1);
+		if (match != 'M') {/*fragments do not match*/
+			xfer_size = size;
+			bad_match_flag = 1;
+			if (match == 'F') {
+				fprintf(stderr, "LOCAL match status is F\n");
+				if (np_tmp != NULL)
+					np = strndup(np_tmp, strlen(np_tmp));
+			}
+		} else {
+			fprintf(stderr, "LOCAL match status is M\n");
+		}
 
 		fprintf(stderr, "LOCAL Creating file\n");
 		fprintf(stderr, "LOCAL mode is %d for %s\n", mode, np);
@@ -1666,15 +1696,6 @@ sink(int argc, char **argv, const char *src)
 			continue;
 		}
 	       
-		fprintf (stderr, "4: Sending null to remout.\n"); 
-		(void) atomicio(vwrite, remout, "", 1);
-
-		//fprintf(stderr, "LOCAL getting match status\n");
-		//char *match;
-		//match = '\0';
-		//(void) atomicio(read, remin, match, 1);
-		//fprintf(stderr, "LOCAL match status is %s\n", match);
-		
 		if ((bp = allocbuf(&buffer, ofd, COPY_BUFLEN)) == NULL) {
 			(void) close(ofd);
 			continue;
@@ -1689,14 +1710,14 @@ sink(int argc, char **argv, const char *src)
 		 */
 		statbytes = 0;
 		if (showprogress)
-			start_progress_meter(curfile, size, &statbytes);
+			start_progress_meter(curfile, xfer_size, &statbytes);
 		set_nonblock(remin);
-		fprintf(stderr, "\nLOCAL size is %ld\n", size);
+		fprintf(stderr, "\nLOCAL size is %ld\n", xfer_size);
 		int total_bytes = 0;
-		for (count = i = 0; i < size; i += bp->cnt) {
+		for (count = i = 0; i < xfer_size; i += bp->cnt) {
 			amt = bp->cnt;
-			if (i + amt > size)
-				amt = size - i;
+			if (i + amt > xfer_size)
+				amt = xfer_size - i;
 			count += amt;
 			/* read the data from the socket*/
 			do {
@@ -1735,11 +1756,12 @@ sink(int argc, char **argv, const char *src)
 			wrerr = 1;
 		}
 		if (!wrerr && (!exists || S_ISREG(stb.st_mode)) &&
-		    ftruncate(ofd, size) != 0)
+		    ftruncate(ofd, xfer_size) != 0)
 			note_err("%s: truncate: %s", np, strerror(errno));
 
                 /* if np_tmp isn't set then we don't have a resume file to cat */
-		if (resume_flag && np_tmp) {
+		/* likewise, bad match flag means no resume flag */
+		if (resume_flag && np_tmp && !bad_match_flag) {
 			FILE *orig, *resume;
 			char res_buf[512]; /* set at 512 just because, might want to increase*/
 			ssize_t res_bytes = 0;
