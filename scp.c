@@ -2161,9 +2161,9 @@ void
 usage(void)
 {
 	(void) fprintf(stderr,
-	    "usage: scp [-346ABCpqrTv] [-c cipher] [-F ssh_config] [-i identity_file]\n"
+	    "usage: scp [-346ABCpqrTvR] [-c cipher] [-F ssh_config] [-i identity_file]\n"
 	    "            [-J destination] [-l limit] [-o ssh_option] [-P port]\n"
-	    "            [-S program] source ... target\n");
+	    "            [-S program] [-s filepath of remote scp] source ... target\n");
 	exit(1);
 }
 
