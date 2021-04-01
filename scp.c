@@ -401,16 +401,17 @@ int Tflag, pflag, iamremote, iamrecursive, targetshouldbedirectory;
 #define	CMDNEEDS	64
 char cmd[CMDNEEDS];		/* must hold "rcp -r -p -d\0" */
 
+/* forward declarations */
 int response(void);
-int debug_response(char *);
+int debug_response(char *); /* debugging responses -cjr. rm for prod*/
 void rsource(char *, struct stat *);
 void sink(int, char *[], const char *);
 void source(int, char *[]);
 void tolocal(int, char *[]);
 void toremote(int, char *[]);
 void usage(void);
-//void calculate_md5sum(char *[], char );
-void rand_str(char *, size_t);
+void calculate_md5sum(char *, char *, off_t); /*get the md5sum of file to length*/
+void rand_str(char *, size_t); /*gen randome char string */
 
 int
 main(int argc, char **argv)
@@ -421,6 +422,8 @@ main(int argc, char **argv)
 	extern char *optarg;
 	extern int optind;
 
+	/* we use this to prepend the debugging statements
+	 * so we know which side is saying what */
 	gethostname(hostname, HOST_NAME_MAX + 1);
 	
 	/* Ensure that fds 0, 1 and 2 are open or directed to /dev/null */
@@ -591,10 +594,11 @@ addargs(&args, "-oPermitLocalCommand=no");
 	remin = remout = -1;
 	do_cmd_pid = -1;
 	/* Command to be executed on remote system using "ssh". */
-	/* TODO: problem is that the command uses the first scp in the users
+	/* the command uses the first scp in the users
 	 * path. This isn't necessarily going to be the 'right' scp to use.
-	 * I'm not sure how to resolve this without hard coding it in
-	 * maybe a user config option? */
+	 * So the current solution is to give the user the option of 
+	 * entering the path to correct scp. If they don't then it defaults
+	 * to whatever scp is first in their path -cjr */
 	(void) snprintf(cmd, sizeof cmd, "%s%s%s%s%s%s",
 			remote_path ? remote_path : "scp",
 			verbose_mode ? " -v" : "",
@@ -603,7 +607,7 @@ addargs(&args, "-oPermitLocalCommand=no");
 			resume_flag ? " -R" : "");
 
 	if (verbose_mode)
-		fprintf(stderr, "Sending cmd %s\n", cmd);
+		fprintf(stderr, "%s: Sending cmd %s\n", hostname, cmd);
 	
 	(void) ssh_signal(SIGPIPE, lostconn);
 
@@ -1116,9 +1120,12 @@ tolocal(int argc, char **argv)
 	free(src);
 }
 
+/* calculate the md5 hash of a file up to length bytes
+ * this is used to determine if remote and local file 
+ * fragments match. There may be a more efficient process for the hashing */
 void calculate_md5sum(char *filename, char *output, off_t length)
 {
-#define md5_buflen 512	
+#define md5_buflen 512	/* 512 is an arbitrary size */
 	*output = '\0';
 	//open file for calculating md5sum
 	FILE *file_ptr;
@@ -1143,6 +1150,8 @@ void calculate_md5sum(char *filename, char *output, off_t length)
 	off_t sum = 0; 
 	
 	MD5_Init(&c);
+	/* read in buflen btyes and update the md5sum
+	 * do this until we get to less than buflen bytes ot read in */
 	do
 	{
 		bytes=fread(buf, 1, md5_buflen, file_ptr);
@@ -1150,6 +1159,8 @@ void calculate_md5sum(char *filename, char *output, off_t length)
 		sum += bytes;
 	}while(sum + md5_buflen < length);
 
+	/* we need to read in the last < buflen bytes 1 by 1 or we
+	 * get a bad result. */
 	do
 	{
 		bytes=fread(buf, 1, 1, file_ptr);
@@ -1159,6 +1170,7 @@ void calculate_md5sum(char *filename, char *output, off_t length)
 	
 	MD5_Final(out, &c);
 	
+	/* convert the md5 hash into a string */
 	for(n=0; n<MD5_DIGEST_LENGTH; n++) {
 		snprintf(tmp, 3, "%02x", out[n]);
 		strcat(output, tmp);
@@ -1187,7 +1199,7 @@ source(int argc, char **argv)
 	size_t insize;
 	unsigned long long ull;
 	char *match; /* used to communicate fragment match */
-	match = "\0"; /*default is to fail the match*/
+	match = "\0"; /*default is to fail the match. NULL and F both indicate fail*/
 	
 	if (verbose_mode)
 		fprintf (stderr, "%s In source\n", hostname);
@@ -1224,7 +1236,8 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 				if (verbose_mode)
 					fprintf(stderr, "%s: Name is '%s' and hash '%s'\n", hostname, name, md5sum);
 				// debug -cjr
-				//fprintf (stderr,"%s: size of %s is %ld\n", hostname, name, stb.st_size);
+				if (verbose_mode)
+					fprintf (stderr,"%s: size of %s is %ld\n", hostname, name, stb.st_size);
 			}
 			break;
 		case S_IFDIR:
@@ -1247,6 +1260,7 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 				goto next;
 		}
 #define	FILEMODEMASK	(S_ISUID|S_ISGID|S_IRWXU|S_IRWXG|S_IRWXO)
+		/* Add a hash of the file along with the filemode if in resume */
 		if (resume_flag) 
 			snprintf(buf, sizeof buf, "C%04o %lld %s %s\n",
 				 (u_int) (stb.st_mode & FILEMODEMASK),
@@ -1256,20 +1270,16 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 				 (u_int) (stb.st_mode & FILEMODEMASK),
 				 (long long)stb.st_size, last);
 
-		// How about we add a hash of the file along with the filemode?
-		// once we have that we can actually use that to figure out the
-		// what we need to send. 
 		if (verbose_mode)
 			fmprintf(stderr, "%s: Sending file modes: %s", hostname, buf);
-		//fprintf(stderr, "%s: about to start atomico vwrite to remote out\n", hostname);
+
 		(void) atomicio(vwrite, remout, buf, strlen(buf));
-		//fprintf(stderr, "%s: ended atomico vwrite to remote out\n", hostname);
+
 		if (verbose_mode)
 			fprintf(stderr, "%s: inbuf length %ld buf length %ld\n", hostname, strlen(inbuf), strlen(buf));
-		if (resume_flag) {
-			//fprintf(stderr, "%s: about to start atomico read from remote in\n", hostname);
+
+		if (resume_flag) { /* get the hash response from the remote */
 			(void) atomicio(read, remin, inbuf, 127);
-			//fprintf(stderr, "%s: ended atomico read from remote in\n", hostname);
 			if (verbose_mode)
 				fprintf(stderr, "%s: we got '%s' in inbuf length %ld buf was %ld\n", hostname, inbuf, strlen(inbuf), strlen(buf));
 		}
@@ -1279,84 +1289,85 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 				fprintf(stderr, "%s: response is less than 0\n", hostname);
 			goto next;
 		}
-		cp = inbuf;
 		xfer_size = stb.st_size;
 
-		if (*cp == 'R' && resume_flag) { // resume file transfer
-			char *in_md5sum; /* where to hold the incoming md5sum */
-			in_md5sum = calloc(33, sizeof(char));
-			for (++cp; cp < inbuf + 5; cp++) {
-				/* skip over the mode */
-			}
-			if (*cp++ != ' ') {
-				fprintf(stderr, "%s: mode not delineated!\n", hostname);
-			}
-
-			if (!isdigit((unsigned char)*cp))
-				fprintf(stderr, "%s: size not present\n", hostname);
-			ull = strtoull(cp, &cp, 10);
-			if (!cp || *cp++ != ' ')
-				fprintf(stderr, "%s: size not delimited\n", hostname);
-			if (TYPE_OVERFLOW(off_t, ull))
-				fprintf(stderr, "%s: size out of range\n", hostname);
-			insize = (off_t)ull;
-
-			if (verbose_mode)
-				fprintf (stderr, "%s: received size of %ld\n", hostname, insize); 
-
-			/* copy the cp pointer byte by byte */
-			for (int i = 0; i < 32; i++) {
-				strncat(in_md5sum, cp++, 1);
-			}
-			if (verbose_mode)
-				fprintf (stderr, "%s: in_md5sum '%s'\n", hostname, in_md5sum); 
-
-			/*get the md5sum of the source file to the byte length we just got*/
-			calculate_md5sum(name, test_md5sum, insize);
-			if (verbose_mode)
-				fprintf(stderr, "%s: calculated md5sum of local %s to %ld is %s\n", hostname, last, insize, test_md5sum);
-			/* compare the incoming md5 hash to the md5 hash of the local file*/
-			if (strcmp(in_md5sum, test_md5sum) == 0) {
-				/* the fragments match so we should seek to the appropriate place in the 
-				 * local file and set the remote file to append */
-				if (verbose_mode)
-					fprintf(stderr, "%s: File fragments match\n", hostname);
-				//fprintf(stderr, "%s: seeking to %ld\n", hostname, insize);
-				xfer_size = stb.st_size - insize;
-				if (verbose_mode)
-					fprintf(stderr, "%s: xfer_size: %ld, stb.st_size: %ld insize: %ld\n",
-						hostname, xfer_size, stb.st_size, insize);
-				if (lseek(fd, insize, SEEK_CUR) != (off_t)insize) {
-					/*TODO exception handling */
-					if (verbose_mode)
-						fprintf(stderr, "%s: lseek did not return %ld\n", hostname, insize) ;
+		/* we only do the following in resume mode because we have a 
+		 * new buf from the remote to parse */
+		if (resume_flag) {
+			cp = inbuf;
+			if (*cp == 'R') { // resume file transfer
+				char *in_md5sum; /* where to hold the incoming md5sum */
+				in_md5sum = calloc(33, sizeof(char));
+				for (++cp; cp < inbuf + 5; cp++) {
+					/* skip over the mode */
 				}
-				match = "M";
-			} else {
-				/* the fragments don't match so we should start over from the begining */
+				if (*cp++ != ' ') {
+					fprintf(stderr, "%s: mode not delineated!\n", hostname);
+				}
+				
+				if (!isdigit((unsigned char)*cp))
+					fprintf(stderr, "%s: size not present\n", hostname);
+				ull = strtoull(cp, &cp, 10);
+				if (!cp || *cp++ != ' ')
+					fprintf(stderr, "%s: size not delimited\n", hostname);
+				if (TYPE_OVERFLOW(off_t, ull))
+					fprintf(stderr, "%s: size out of range\n", hostname);
+				insize = (off_t)ull;
+				
 				if (verbose_mode)
-					fprintf(stderr, "%s: File fragments do not match '%s'(in) '%s'(local)\n",
-						hostname, in_md5sum, test_md5sum);	
-				match = "F";	
+					fprintf (stderr, "%s: received size of %ld\n", hostname, insize); 
+				
+				/* copy the cp pointer byte by byte */
+				for (int i = 0; i < 32; i++) {
+					strncat(in_md5sum, cp++, 1);
+				}
+				if (verbose_mode)
+					fprintf (stderr, "%s: in_md5sum '%s'\n", hostname, in_md5sum); 
+				
+				/*get the md5sum of the source file to the byte length we just got*/
+				calculate_md5sum(name, test_md5sum, insize);
+				if (verbose_mode)
+					fprintf(stderr, "%s: calculated md5sum of local %s to %ld is %s\n", hostname, last, insize, test_md5sum);
+				/* compare the incoming md5 hash to the md5 hash of the local file*/
+				if (strcmp(in_md5sum, test_md5sum) == 0) {
+					/* the fragments match so we should seek to the appropriate place in the 
+					 * local file and set the remote file to append */
+					if (verbose_mode)
+						fprintf(stderr, "%s: File fragments match\n", hostname);
+					//fprintf(stderr, "%s: seeking to %ld\n", hostname, insize);
+					xfer_size = stb.st_size - insize;
+					if (verbose_mode)
+						fprintf(stderr, "%s: xfer_size: %ld, stb.st_size: %ld insize: %ld\n",
+							hostname, xfer_size, stb.st_size, insize);
+					if (lseek(fd, insize, SEEK_CUR) != (off_t)insize) {
+						/*TODO exception handling */
+						if (verbose_mode)
+							fprintf(stderr, "%s: lseek did not return %ld\n", hostname, insize) ;
+					}
+					match = "M";
+				} else {
+					/* the fragments don't match so we should start over from the begining */
+					if (verbose_mode)
+						fprintf(stderr, "%s: File fragments do not match '%s'(in) '%s'(local)\n",
+							hostname, in_md5sum, test_md5sum);	
+					match = "F";	
+					xfer_size = stb.st_size;
+				}
+				free(in_md5sum);
+			}
+			if (*cp == 'S') { /* skip file */
+				if (verbose_mode)
+					fprintf(stderr, "%s: Should be skipping this file\n", hostname);
+				goto next;
+			}
+			if (*cp == 'C') { /*transfer entire file*/
+				if (verbose_mode)
+					fprintf(stderr, "%s: Resending entire file\n", hostname);
 				xfer_size = stb.st_size;
 			}
-			free(in_md5sum);
-		}
-		if (*cp == 'S' && resume_flag) { /* skip file */
-			if (verbose_mode)
-				fprintf(stderr, "%s: Should be skipping this file\n", hostname);
-			goto next;
-		}
-		if (*cp == 'C' && resume_flag) { /*transfer entire file*/
-			if (verbose_mode)
-				fprintf(stderr, "%s: Resending entire file\n", hostname);
-			xfer_size = stb.st_size;
-		}
-
-		/* need to send the match status 
-		 * We always send the match status or we get out of sync
-		 */
-		if (resume_flag) {
+			/* need to send the match status 
+			 * We always send the match status or we get out of sync
+			 */
 			if (verbose_mode)
 				fprintf(stderr, "%s: sending match %s\n", hostname, match);
 			(void) atomicio(vwrite, remout, match, 1);
@@ -1536,7 +1547,7 @@ sink(int argc, char **argv, const char *src)
 	}
 	
 	for (first = 1;; first = 0) {
-		bad_match_flag = 0;
+		bad_match_flag = 0; /* used in resume mode. */
 		if (verbose_mode) 
 			fprintf(stderr, "%s: buf is %s\n", hostname, buf);
 		cp = buf;
@@ -1611,9 +1622,9 @@ sink(int argc, char **argv, const char *src)
 			(void) atomicio(vwrite, remout, "", 1);
 			continue;
 		}
-		if (*cp == 'R') { /*resume file transfer*/
+		if (*cp == 'R') { /*resume file transfer (dont' think I need this here)*/
 			if (verbose_mode)
-				fprintf(stderr, "%s: Recived a RESUME request with %s\n", hostname, cp);
+				fprintf(stderr, "%s: Received a RESUME request with %s\n", hostname, cp);
 			resume_flag = 1;
 		}
 		if (*cp != 'C' && *cp != 'D') {
@@ -1669,8 +1680,8 @@ sink(int argc, char **argv, const char *src)
 		if (verbose_mode)
 			fprintf(stderr, "%s: cp is %s\n", hostname, cp);
 		
-		*remote_md5sum = '\0';
 		if (resume_flag && !dir_flag) {
+			*remote_md5sum = '\0';
 			for (int i = 0; i < 32; i++) {
 				strncat (remote_md5sum, cp++, 1);
 			}
@@ -1809,7 +1820,6 @@ sink(int argc, char **argv, const char *src)
 				if (verbose_mode)
 					fprintf(stderr, "%s: Sending new file (%s) modes: %s\n",
 						hostname, np, outbuf);
-				//fprintf (stderr, "%s: Sending outbuf to remout.\n", hostname);
 				/*now we have to send np's length and hash to the other end 
 				 * if the computed hashes match then we seek to np's length in
 				 * file and append to np starting from there */
@@ -1976,14 +1986,15 @@ sink(int argc, char **argv, const char *src)
 			if (verbose_mode)
 				fprintf(stderr, "%s: Resume flag is set. Going to concat %s to %s  now\n",
 					hostname, np, np_tmp);
-			/* np/ofd is the resume file so open np_tmp for appending */
-			/* close ofd because we are going to be shifting it
+			/* np/ofd is the resume file so open np_tmp for appending 
+			 * close ofd because we are going to be shifting it
 			 * and I don't wnat the same file open in multiple descriptors */
 			if (close(ofd) == -1)
 				note_err("%s: close: %s", np, strerror(errno));
 			/* orig is the target file, resume is the temp file */
-			orig = fopen(np_tmp, "a");
-			resume = fopen(np, "r");
+			/* TODO exception handling */
+			orig = fopen(np_tmp, "a"); /*open for appending*/
+			resume = fopen(np, "r"); /*open for reading only*/
 			/* get the number of bytes in the temp file*/
 			if (fstat(fileno(resume), &res_stat) == -1) {
 				/*TODO need exception handling here */
@@ -2010,6 +2021,7 @@ sink(int argc, char **argv, const char *src)
 			if (verbose_mode)
 				fprintf (stderr, "%s np(%s) and np_tmp(%s)\n", hostname, np, np_tmp);
 			/* reset ofd to the original np */
+			/* TODO exception handling */
 			ofd = open(np_tmp, O_WRONLY);
 		}
 		if (verbose_mode)
@@ -2107,6 +2119,7 @@ response(void)
 	/* NOTREACHED */
 }
 
+/* remove for production */
 int
 debug_response(char *message)
 {
