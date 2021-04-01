@@ -17,6 +17,7 @@
 /*
  * Copyright (c) 1999 Theo de Raadt.  All rights reserved.
  * Copyright (c) 1999 Aaron Campbell.  All rights reserved.
+ * Copyright (c) 2021 Chris Rapier. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -1341,9 +1342,9 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 						fprintf(stderr, "%s: xfer_size: %ld, stb.st_size: %ld insize: %ld\n",
 							hostname, xfer_size, stb.st_size, insize);
 					if (lseek(fd, insize, SEEK_CUR) != (off_t)insize) {
-						/*TODO exception handling */
 						if (verbose_mode)
 							fprintf(stderr, "%s: lseek did not return %ld\n", hostname, insize) ;
+						goto next;
 					}
 					match = "M";
 				} else {
@@ -1879,6 +1880,11 @@ sink(int argc, char **argv, const char *src)
 						fprintf(stderr, "%s: match status is F\n", hostname);
 					if (np_tmp != NULL)
 						np = strndup(np_tmp, strlen(np_tmp));
+					else {
+						run_err("%s: np_tmp is NULL", hostname);
+						continue;
+					}
+
 				}
 			} else {
 				if (verbose_mode)
@@ -1983,6 +1989,8 @@ bad:			run_err("%s: %s", np, strerror(errno));
 			off_t sum = 0;
 			struct stat res_stat;
 			*res_buf = '\0';
+			orig = NULL; /*supress warnings*/
+			resume = NULL; /*supress warnings*/
 
 			if (verbose_mode)
 				fprintf(stderr, "%s: Resume flag is set. Going to concat %s to %s  now\n",
@@ -1993,14 +2001,20 @@ bad:			run_err("%s: %s", np, strerror(errno));
 			if (close(ofd) == -1)
 				note_err("%s: close: %s", np, strerror(errno));
 			/* orig is the target file, resume is the temp file */
-			/* TODO exception handling */
 			orig = fopen(np_tmp, "a"); /*open for appending*/
+			if (orig == NULL) {
+				run_err("%s: Could not open %s for appending.", hostname, np_tmp);
+				goto stopcat;
+			}
 			resume = fopen(np, "r"); /*open for reading only*/
+			if (resume == NULL) {
+				run_err("%s: Could not open %s for reading.", hostname, np);
+				goto stopcat;
+			}
 			/* get the number of bytes in the temp file*/
 			if (fstat(fileno(resume), &res_stat) == -1) {
-				/*TODO need exception handling here */
-				if (verbose_mode)
-					fprintf(stderr, "%s: restat is null!\n", hostname);
+				run_err("%s: Could not stat %s", hostname, np);
+				goto stopcat;
 			}
 			/* while the number of bytes read from the temp file
 			 * is less than the size of the file read in a chunk and
@@ -2010,10 +2024,11 @@ bad:			run_err("%s: %s", np, strerror(errno));
 				fwrite(res_buf, 1, res_bytes, orig);
 				sum += res_bytes;
 			} while (sum < res_stat.st_size);
-			fcount++;
 
-			fclose(orig);
-			fclose(resume);
+stopcat:		if (orig)
+				fclose(orig);
+			if (resume)
+				fclose(resume);
 			/* delete the resume file */
 			remove(np);
 			if (verbose_mode)
@@ -2022,8 +2037,10 @@ bad:			run_err("%s: %s", np, strerror(errno));
 			if (verbose_mode)
 				fprintf (stderr, "%s np(%s) and np_tmp(%s)\n", hostname, np, np_tmp);
 			/* reset ofd to the original np */
-			/* TODO exception handling */
-			ofd = open(np_tmp, O_WRONLY);
+			if ((ofd = open(np_tmp, O_WRONLY)) == -1) {
+				goto bad;
+			}
+			fcount++;
 		}
 		if (verbose_mode)
 			fprintf (stderr, "%s: Current file count is %d\n", hostname, fcount);
