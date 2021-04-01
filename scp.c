@@ -210,7 +210,7 @@ do_local_cmd(arglist *a)
 
 	if (verbose_mode)
 		fprintf(stderr, "In do_local_cmd\n");
-	
+
 	if (a->num == 0)
 		fatal("do_local_cmd: no arguments");
 
@@ -256,7 +256,7 @@ int
 do_cmd(char *host, char *remuser, int port, char *cmd, int *fdin, int *fdout)
 {
 	int pin[2], pout[2], reserved[2];
-	
+
 	if (verbose_mode)
 		fmprintf(stderr,
 		    "Executing: program %s host %s, user %s, command %s\n",
@@ -312,6 +312,7 @@ do_cmd(char *host, char *remuser, int port, char *cmd, int *fdin, int *fdout)
 		addargs(&args, "%s", cmd);
 		execvp(ssh_program, args.list);
 		perror(ssh_program);
+		exit(1);
 	} else if (do_cmd_pid == -1) {
 		fatal("fork: %s", strerror(errno));
 	}
@@ -449,7 +450,7 @@ main(int argc, char **argv)
 	args.list = remote_remote_args.list = NULL;
 	addargs(&args, "%s", ssh_program);
 	addargs(&args, "-x");
-addargs(&args, "-oPermitLocalCommand=no");
+	addargs(&args, "-oPermitLocalCommand=no");
 	addargs(&args, "-oClearAllForwardings=yes");
 	addargs(&args, "-oRemoteCommand=none");
 	addargs(&args, "-oRequestTTY=no");
@@ -527,7 +528,7 @@ addargs(&args, "-oPermitLocalCommand=no");
 		case 'R':
 			resume_flag = 1;
 			break;
-			
+
 		/* Server options. */
 		case 'd':
 			targetshouldbedirectory = 1;
@@ -1374,7 +1375,7 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 		}
 				
 		if ((bp = allocbuf(&buffer, fd, COPY_BUFLEN)) == NULL) {
-		next:			if (fd != -1) {
+next:			if (fd != -1) {
 				(void) close(fd);
 				fd = -1;
 			}
@@ -1891,7 +1892,7 @@ sink(int argc, char **argv, const char *src)
 			fprintf(stderr, "%s: Creating file. mode is %d for %s\n",
 				hostname, mode, np);
 		if ((ofd = open(np, O_WRONLY|O_CREAT, mode)) == -1) {
-		bad:			run_err("%s: %s", np, strerror(errno));
+bad:			run_err("%s: %s", np, strerror(errno));
 			continue;
 		}
 
