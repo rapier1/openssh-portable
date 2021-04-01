@@ -1753,23 +1753,25 @@ sink(int argc, char **argv, const char *src)
 		if (resume_flag) {
 			if (verbose_mode)
 				fprintf(stderr, "%s: np is %s\n", hostname, np);
+			/* does the file exist and if it does it writable? */
 			if (stat(np, &npstat) == -1) {
 				if (verbose_mode)
 					fprintf(stderr, "%s Local file does not exist size is %ld!\n",
 						hostname, npstat.st_size);
 				npstat.st_size = 0;
-			}
-			/* check to see if the file is writeable 
-			* if it isn't then we need to skip it but 
-			* before we skip it we need to send the remote 
-			* what they are expecting so 128 bytes and then 
-			* a null */
-			if (access (np, W_OK) != 0) {
-				fprintf(stderr, "scp: %s: Permission denied\n", np);
-				snprintf(outbuf, 128, "S%-126s", " ");
-				(void)atomicio(vwrite, remout, outbuf, strlen(outbuf));
-				(void)atomicio(vwrite, remout, "", 1);
-				continue;
+			} else {
+				/* check to see if the file is writeable 
+				 * if it isn't then we need to skip it but 
+				 * before we skip it we need to send the remote 
+				 * what they are expecting so 128 bytes and then 
+				 * a null */
+				if (access (np, W_OK) != 0) {
+					fprintf(stderr, "scp: %s: Permission denied on %s\n", np, hostname);
+					snprintf(outbuf, 128, "S%-126s", " ");
+					(void)atomicio(vwrite, remout, outbuf, strlen(outbuf));
+					(void)atomicio(vwrite, remout, "", 1);
+					continue;
+				}
 			}
 			/* this file is already here do we need to move it?
 			 * Check to make sure npstat.st_size > 0. If it is 0 then we
