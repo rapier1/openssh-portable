@@ -1149,27 +1149,16 @@ void calculate_md5sum(char *filename, char *output, off_t length)
 	ssize_t bytes;
 	unsigned char out[MD5_DIGEST_LENGTH];
 	char tmp[3];
-	off_t sum = 0;
 
 	MD5_Init(&c);
-	/* read in buflen btyes and update the md5sum
-	 * do this until we get to less than buflen bytes ot read in */
-	do
-	{
-		bytes=fread(buf, 1, md5_buflen, file_ptr);
+	while (length > 0) {
+		if (length > md5_buflen)
+			bytes=fread(buf, 1, md5_buflen, file_ptr);
+		else
+			bytes=fread(buf, 1, length, file_ptr);
 		MD5_Update(&c, buf, bytes);
-		sum += bytes;
-	}while(sum + md5_buflen < length);
-
-	/* we need to read in the last < buflen bytes 1 by 1 or we
-	 * get a bad result. */
-	do
-	{
-		bytes=fread(buf, 1, 1, file_ptr);
-		MD5_Update(&c, buf, bytes);
-		sum += bytes;
-	}while(sum < length);
-
+		length -= md5_buflen;
+	}
 	MD5_Final(out, &c);
 
 	/* convert the md5 hash into a string */
@@ -1551,7 +1540,7 @@ sink(int argc, char **argv, const char *src)
 	for (first = 1;; first = 0) {
 		bad_match_flag = 0; /* used in resume mode. */
 		if (verbose_mode)
-			fprintf(stderr, "%s: buf is %s\n", hostname, buf);
+			fprintf(stderr, "%s: position 1 buf is %s\n", hostname, buf);
 		cp = buf;
 		if (atomicio(read, remin, cp, 1) != 1)
 			goto done;
@@ -1588,8 +1577,8 @@ sink(int argc, char **argv, const char *src)
 			*--cp = 0;
 
 		cp = buf;
-		if (verbose_mode)
-			fprintf(stderr, "%s: buf is %s\n", hostname, buf);
+		//if (verbose_mode)
+		//	fprintf(stderr, "%s: buf is %s\n", hostname, buf);
 
 		if (*cp == 'T') {
 			setimes++;
@@ -1644,8 +1633,8 @@ sink(int argc, char **argv, const char *src)
 			SCREWUP("expected control record");
 		}
 		mode = 0;
-		if (verbose_mode)
-			fprintf(stderr, "%s: buf is %s\n", hostname, buf);
+		//if (verbose_mode)
+		//	fprintf(stderr, "%s: buf is %s\n", hostname, buf);
 		if (verbose_mode)
 			fprintf(stderr, "%s: cp is %s\n", hostname, cp);
 		/* we need to track if this object is a directory
@@ -1769,6 +1758,18 @@ sink(int argc, char **argv, const char *src)
 					fprintf(stderr, "%s Local file does not exist size is %ld!\n",
 						hostname, npstat.st_size);
 				npstat.st_size = 0;
+			}
+			/* check to see if the file is writeable 
+			* if it isn't then we need to skip it but 
+			* before we skip it we need to send the remote 
+			* what they are expecting so 128 bytes and then 
+			* a null */
+			if (access (np, W_OK) != 0) {
+				fprintf(stderr, "scp: %s: Permission denied\n", np);
+				snprintf(outbuf, 128, "S%-126s", " ");
+				(void)atomicio(vwrite, remout, outbuf, strlen(outbuf));
+				(void)atomicio(vwrite, remout, "", 1);
+				continue;
 			}
 			/* this file is already here do we need to move it?
 			 * Check to make sure npstat.st_size > 0. If it is 0 then we
@@ -2003,17 +2004,17 @@ bad:			run_err("%s: %s", np, strerror(errno));
 			/* orig is the target file, resume is the temp file */
 			orig = fopen(np_tmp, "a"); /*open for appending*/
 			if (orig == NULL) {
-				run_err("%s: Could not open %s for appending.", hostname, np_tmp);
+				fprintf(stderr, "%s: Could not open %s for appending.", hostname, np_tmp);
 				goto stopcat;
 			}
 			resume = fopen(np, "r"); /*open for reading only*/
 			if (resume == NULL) {
-				run_err("%s: Could not open %s for reading.", hostname, np);
+				fprintf(stderr, "%s: Could not open %s for reading.", hostname, np);
 				goto stopcat;
 			}
 			/* get the number of bytes in the temp file*/
 			if (fstat(fileno(resume), &res_stat) == -1) {
-				run_err("%s: Could not stat %s", hostname, np);
+				fprintf(stderr, "%s: Could not stat %s", hostname, np);
 				goto stopcat;
 			}
 			/* while the number of bytes read from the temp file
@@ -2038,6 +2039,8 @@ stopcat:		if (orig)
 				fprintf (stderr, "%s np(%s) and np_tmp(%s)\n", hostname, np, np_tmp);
 			/* reset ofd to the original np */
 			if ((ofd = open(np_tmp, O_WRONLY)) == -1) {
+				fprintf(stderr, "%s: couldn't open %s in append function\n", hostname, np_tmp);
+				atomicio(vwrite, remout, "", 1);
 				goto bad;
 			}
 			fcount++;
