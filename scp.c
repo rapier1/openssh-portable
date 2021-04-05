@@ -124,7 +124,6 @@
 #include "progressmeter.h"
 #include "utf8.h"
 #include <openssl/evp.h>
-#include "xxhash.h"
 
 extern char *__progname;
 
@@ -1129,16 +1128,17 @@ tolocal(int argc, char **argv)
  * fragments match. There may be a more efficient process for the hashing */
 void calculate_hash(char *filename, char *output, off_t length)
 {
-#ifdef XXH_VERSION_NUMBER
-#define HASH_LEN 16 /* 16 xxhash64 40 sha1, 64 blake2s256*/
-#else
-#define HASH_LEN 64
-#endif
-
-#define HASH_BUFLEN 1024	/* 1024 is an arbitrary size */
-     	size_t bytes;
-    	FILE *file_ptr;
-	char buf[HASH_BUFLEN];
+#define HASH_LEN 64 /*40 sha1, 64 blake2s256*/
+#define hash_buflen 1024	/* 1024 is an arbitrary size */
+	int n, md_len;
+	EVP_MD_CTX *c;
+	const EVP_MD *md;
+	char buf[hash_buflen];
+	ssize_t bytes;
+	unsigned char out[EVP_MAX_MD_SIZE];
+	char tmp[3];
+	FILE *file_ptr;
+	*output = '\0';
 
 	//open file for calculating hash
 	file_ptr = fopen(filename, "r");
@@ -1150,72 +1150,33 @@ void calculate_hash(char *filename, char *output, off_t length)
 			snprintf(output, HASH_LEN, "%s",  " ");
 		}
 		return;
-	}	
-	
-	if (HASH_LEN == 64) {
-		int n, md_len;
-		EVP_MD_CTX *c;
-		const EVP_MD *md;
-		unsigned char out[EVP_MAX_MD_SIZE];
-		char tmp[3];
-		*output = '\0';
-		
-		md = EVP_get_digestbyname("blake2s256");
-		c = EVP_MD_CTX_new();
-		EVP_DigestInit_ex(c, md, NULL);
-		
-		while (length > 0) {
-			if (length > HASH_BUFLEN)
-				bytes=fread(buf, 1, HASH_BUFLEN, file_ptr);
-			else
-				bytes=fread(buf, 1, length, file_ptr);
-			EVP_DigestUpdate(c, buf, bytes);
-			length -= HASH_BUFLEN;
-		}
-		EVP_DigestFinal_ex(c, out, &md_len);
-		
-		/* convert the hash into a string */
-		for(n=0; n < md_len; n++) {
-			snprintf(tmp, 3, "%02x", out[n]);
-			strcat(output, tmp);
-		}
-		fclose(file_ptr);
-		return;
 	}
-	
-	/* create a hash state */
-	XXH64_state_t* const state = XXH64_createState();
-	if (state==NULL) abort();
-	
-	/* Initialize state with selected seed */
-	XXH64_hash_t const seed = 0;   /* or any other value */
-	if (XXH64_reset(state, seed) == XXH_ERROR) abort();
-	
-	/* Feed the state with input data, any size, any number of times */
-	while ( length > 0 ) {
-		if (length > HASH_BUFLEN) 
-			bytes = fread(buf, 1, HASH_BUFLEN, file_ptr);
+
+	md = EVP_get_digestbyname("blake2s256");
+	c = EVP_MD_CTX_new();
+	EVP_DigestInit_ex(c, md, NULL);
+		
+	while (length > 0) {
+		if (length > hash_buflen)
+			bytes=fread(buf, hash_buflen, 1, file_ptr);
 		else
-			bytes = fread(buf, 1, length, file_ptr);
-		if (XXH64_update(state, buf, bytes) == XXH_ERROR) abort();
-		length -= HASH_BUFLEN;
+			bytes=fread(buf, length, 1, file_ptr);
+		EVP_DigestUpdate(c, buf, bytes);
+		length -= hash_buflen;
 	}
-	
-	/* Produce the final hash value */
-	XXH64_hash_t const hash = XXH64_digest(state);
-	
-	/* State could be re-used; but in this example, it is simply freed  */
-	//free(buffer);
-	//XXH64_freeState(state);
-	fclose(file_ptr);
-	
-	sprintf(output, "%-16lX", hash);
+	EVP_DigestFinal_ex(c, out, &md_len);
+	EVP_MD_CTX_free(c);
+	/* convert the hash into a string */
+	for(n=0; n < md_len; n++) {
+		snprintf(tmp, 3, "%02x", out[n]);
+		strcat(output, tmp);
+	}
 	//if (verbose_mode)
 	//	fprintf(stderr, "%s: HASH IS '%s' of length %ld\n", hostname, output, strlen(output));
-	return;
+	fclose(file_ptr);
 }
 
-#define TYPE_OVERFLOW(type, val)		     \
+#define TYPE_OVERFLOW(type, val) \
 	((sizeof(type) == 4 && (val) > INT32_MAX) || \
 	 (sizeof(type) == 8 && (val) > INT64_MAX) || \
 	 (sizeof(type) != 4 && sizeof(type) != 8))
@@ -1358,6 +1319,9 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 				for (int i = 0; i < HASH_LEN; i++) {
 					strncat(in_hashsum, cp++, 1);
 				}
+				//if (verbose_mode)
+				//	fprintf (stderr, "%s: in_hashsum '%s'\n", hostname, in_hashsum);
+
 				/*get the hash of the source file to the byte length we just got*/
 				calculate_hash(name, test_hashsum, insize);
 				//if (verbose_mode)
@@ -1366,8 +1330,8 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 				if (strcmp(in_hashsum, test_hashsum) == 0) {
 					/* the fragments match so we should seek to the appropriate place in the
 					 * local file and set the remote file to append */
-					if (verbose_mode)
-						fprintf(stderr, "%s: File fragments match\n", hostname);
+					//if (verbose_mode)
+					//	fprintf(stderr, "%s: File fragments match\n", hostname);
 					//fprintf(stderr, "%s: seeking to %ld\n", hostname, insize);
 					xfer_size = stb.st_size - insize;
 					//if (verbose_mode)
@@ -2089,7 +2053,7 @@ stopcat:		if (orig)
 				atomicio(vwrite, remout, "", 1);
 				goto bad;
 			}
-			free(np_tmp);
+			//free(np_tmp);
 			//fcount++;
 		}
 		//if (verbose_mode)
@@ -2132,7 +2096,9 @@ stopcat:		if (orig)
 			//if (verbose_mode)
 			//	fprintf (stderr, "%s: Sending null to remout.\n", hostname);
 			(void) atomicio(vwrite, remout, "", 1); }
-	}
+		if (resume_flag && np_tmp)
+			free(np_tmp);
+        }
 done:
 	for (n = 0; n < npatterns; n++)
 		free(patterns[n]);
