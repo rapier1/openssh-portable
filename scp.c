@@ -129,6 +129,9 @@ extern char *__progname;
 
 #define COPY_BUFLEN	16384
 
+/* uncomment for debugging */
+/* #define DEBUG */
+
 int do_cmd(char *host, char *remuser, int port, char *cmd, int *fdin, int *fdout);
 int do_cmd2(char *host, char *remuser, int port, char *cmd, int fdin, int fdout);
 
@@ -171,6 +174,7 @@ pid_t do_cmd_pid = -1;
 /* Flag to indicate that this is a file resume */
 int resume_flag = 0; /* 0 is off, 1 is on */
 
+/* we want the host name for debugging purposes */
 char hostname[HOST_NAME_MAX + 1];
 
 static void
@@ -207,9 +211,9 @@ do_local_cmd(arglist *a)
 	int status;
 	pid_t pid;
 
-	/*if (verbose_mode)*/
-	/*	fprintf(stderr, "In do_local_cmd\n");*/
-
+#ifdef DEBUG
+	fprintf(stderr, "In do_local_cmd\n");
+#endif
 	if (a->num == 0)
 		fatal("do_local_cmd: no arguments");
 
@@ -604,10 +608,9 @@ main(int argc, char **argv)
 			iamrecursive ? " -r" : "", pflag ? " -p" : "",
 			targetshouldbedirectory ? " -d" : "",
 			resume_flag ? " -R" : "");
-
-	/* if (verbose_mode) */
-	/* 	fprintf(stderr, "%s: Sending cmd %s\n", hostname, cmd); */
-
+#ifdef DEBUG
+		fprintf(stderr, "%s: Sending cmd %s\n", hostname, cmd);
+#endif
 	(void) ssh_signal(SIGPIPE, lostconn);
 
 	if (colon(argv[argc - 1]))	/* Dest is remote host. */
@@ -656,9 +659,6 @@ do_times(int fd, int verb, const struct stat *sb)
 	/* strlen(2^64) == 20; strlen(10^6) == 7 */
 	char buf[(20 + 7 + 2) * 2 + 2];
 
-	/* if (verbose_mode) */
-	/* 	fprintf(stderr, "In do_times\n"); */
-
 	(void)snprintf(buf, sizeof(buf), "T%llu 0 %llu 0\n",
 	    (unsigned long long) (sb->st_mtime < 0 ? 0 : sb->st_mtime),
 	    (unsigned long long) (sb->st_atime < 0 ? 0 : sb->st_atime));
@@ -676,9 +676,6 @@ parse_scp_uri(const char *uri, char **userp, char **hostp, int *portp,
      char **pathp)
 {
 	int r;
-
-	/* if (verbose_mode) */
-	/* 	fprintf (stderr, "In parse_scp_uri\n"); */
 
 	r = parse_uri("scp", uri, userp, hostp, portp, pathp);
 	if (r == 0 && *pathp == NULL)
@@ -943,9 +940,6 @@ toremote(int argc, char **argv)
 	int i, r;
 	u_int j;
 
-	/* if (verbose_mode) */
-	/* 	fprintf (stderr, "In toremote\n"); */
-
 	memset(&alist, '\0', sizeof(alist));
 	alist.list = NULL;
 
@@ -1066,9 +1060,6 @@ tolocal(int argc, char **argv)
 	arglist alist;
 	int i, r, sport = -1;
 
-	/* if (verbose_mode) */
-	/* 	fprintf (stderr,"In tolocal\n"); */
-
 	memset(&alist, '\0', sizeof(alist));
 	alist.list = NULL;
 
@@ -1143,8 +1134,7 @@ void calculate_hash(char *filename, char *output, off_t length)
 	{
 		if (verbose_mode) {
 			fprintf(stderr, "%s: error opening file %s\n", hostname, filename);
-			/* fill the expected output with spaces */
-			/* this forces a fragment match failure so entire file will xfer */
+			/* file the expected output with spaces */
 			snprintf(output, HASH_LEN, "%s",  " ");
 		}
 		return;
@@ -1153,26 +1143,25 @@ void calculate_hash(char *filename, char *output, off_t length)
 	md = EVP_get_digestbyname("blake2s256");
 	c = EVP_MD_CTX_new();
 	EVP_DigestInit_ex(c, md, NULL);
-		
+
 	while (length > 0) {
 		if (length > hash_buflen)
-			bytes=fread(buf, hash_buflen, 1, file_ptr);
+			bytes=fread(buf, 1, hash_buflen, file_ptr);
 		else
-			bytes=fread(buf, length, 1, file_ptr);
+			bytes=fread(buf, 1, length, file_ptr);
 		EVP_DigestUpdate(c, buf, bytes);
 		length -= hash_buflen;
 	}
-	EVP_DigestFinal(c, out, &md_len);
+	EVP_DigestFinal_ex(c, out, &md_len);
 	EVP_MD_CTX_free(c);
-	/* convert the hash into a string 
-	 * I feel like there should be a better way to do this */
-	for(n = 0; n < md_len; n++) {
+	/* convert the hash into a string */
+	for(n=0; n < md_len; n++) {
 		snprintf(tmp, 3, "%02x", out[n]);
-		strncat(output, tmp, 3); /*2 hex char + 1 null*/
+		strcat(output, tmp);
 	}
-
-	/* if (verbose_mode) */
-	/*  	fprintf(stderr, "%s: HASH IS '%s' of length %ld\n", hostname, output, strlen(output)); */
+#ifdef DEBUG
+	fprintf(stderr, "%s: HASH IS '%s' of length %ld\n", hostname, output, strlen(output));
+#endif
 	fclose(file_ptr);
 }
 
@@ -1199,13 +1188,11 @@ source(int argc, char **argv)
 	char *match; /* used to communicate fragment match */
 	match = "\0"; /*default is to fail the match. NULL and F both indicate fail*/
 
-	/* if (verbose_mode) */
-	/* 	fprintf (stderr, "%s In source\n", hostname); */
-
 	for (indx = 0; indx < argc; ++indx) {
 		name = argv[indx];
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s index is %d, name is %s\n", hostname, indx, name); */
+#ifdef DEBUG
+		fprintf(stderr, "%s index is %d, name is %s\n", hostname, indx, name);
+#endif
 		statbytes = 0;
 		len = strlen(name);
 		while (len > 1 && name[len-1] == '/')
@@ -1227,15 +1214,13 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 		unset_nonblock(fd);
 		switch (stb.st_mode & S_IFMT) {
 		case S_IFREG:
-			/* only calculate hash if we are in resume mode and a file */
+			/* only calculate hash if we are in resume mode and a file*/
 			if (resume_flag) {
 				calculate_hash(name, hashsum, stb.st_size);
-			/* 	if (verbose_mode) { */
-			/* 		fprintf(stderr, "%s: Name is '%s' and hash '%s'\n",  */
-			/* 		hostname, name, hashsum); */
-			/* 		fprintf (stderr,"%s: size of %s is %ld\n",  */
-			/* 		hostname, name, stb.st_size); */
-			/* 	} */
+#ifdef DEBUG
+				fprintf(stderr, "%s: Name is '%s' and hash '%s'\n", hostname, name, hashsum);
+				fprintf (stderr,"%s: size of %s is %ld\n", hostname, name, stb.st_size);
+#endif
 			}
 			break;
 		case S_IFDIR:
@@ -1244,7 +1229,6 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 				goto next;
 			}
 			/* FALLTHROUGH */
-			__attribute__((fallthrough));
 		default:
 			run_err("%s: not a regular file", name);
 			goto next;
@@ -1269,24 +1253,25 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 				 (u_int) (stb.st_mode & FILEMODEMASK),
 				 (long long)stb.st_size, last);
 
-		/* if (verbose_mode) */
-		/* 	fmprintf(stderr, "%s: Sending file modes: %s", hostname, buf); */
-
+#ifdef DEBUG
+		fprintf(stderr, "%s: Sending file modes: %s", hostname, buf);
+#endif
 		(void) atomicio(vwrite, remout, buf, strlen(buf));
 
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s: inbuf length %ld buf length %ld\n", */
-		/* 		hostname, strlen(inbuf), strlen(buf)); */
-
+#ifdef DEBUG
+		fprintf(stderr, "%s: inbuf length %ld buf length %ld\n", hostname, strlen(inbuf), strlen(buf));
+#endif
 		if (resume_flag) { /* get the hash response from the remote */
 			(void) atomicio(read, remin, inbuf, 127);
-			/* if (verbose_mode) */
-			/* 	fprintf(stderr, "%s: we got '%s' in inbuf length %ld buf was %ld\n", */
-			/* 		hostname, inbuf, strlen(inbuf), strlen(buf)); */
+#ifdef DEBUG
+				fprintf(stderr, "%s: we got '%s' in inbuf length %ld buf was %ld\n",
+					hostname, inbuf, strlen(inbuf), strlen(buf));
+#endif
 		}
 		if (response() < 0) {
-			/* if (verbose_mode) */
-			/* 	fprintf(stderr, "%s: response is less than 0\n", hostname); */
+#ifdef DEBUG
+			fprintf(stderr, "%s: response is less than 0\n", hostname);
+#endif
 			goto next;
 		}
 		xfer_size = stb.st_size;
@@ -1295,7 +1280,7 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 		 * new buf from the remote to parse */
 		if (resume_flag) {
 			cp = inbuf;
-			if (*cp == 'R') { /* resume file transfer */
+			if (*cp == 'R') { /* resume file transfer*/
 				char *in_hashsum; /* where to hold the incoming hash */
 				in_hashsum = calloc(HASH_LEN+1, sizeof(char));
 				for (++cp; cp < inbuf + 5; cp++) {
@@ -1314,64 +1299,73 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 					fprintf(stderr, "%s: size out of range\n", hostname);
 				insize = (off_t)ull;
 
-				/* if (verbose_mode) */
-				/* 	fprintf (stderr, "%s: received size of %ld\n", hostname, insize); */
+#ifdef DEBUG
+				fprintf (stderr, "%s: received size of %ld\n", hostname, insize);
+#endif
 
 				/* copy the cp pointer byte by byte */
 				for (int i = 0; i < HASH_LEN; i++) {
 					strncat(in_hashsum, cp++, 1);
 				}
-				/* if (verbose_mode) */
-				/* 	fprintf (stderr, "%s: in_hashsum '%s'\n", hostname, in_hashsum); */
+#ifdef DEBUG
+				fprintf (stderr, "%s: in_hashsum '%s'\n", hostname, in_hashsum);
+#endif
 
 				/*get the hash of the source file to the byte length we just got*/
 				calculate_hash(name, test_hashsum, insize);
-				/* if (verbose_mode) */
-				/* 	fprintf(stderr, "%s: calculated hashsum of local %s to %ld is %s\n", */
-				/* 		hostname, last, insize, test_hashsum); */
-
+#ifdef DEBUG
+				fprintf(stderr, "%s: calculated hashsum of local %s to %ld is %s\n",
+					hostname, last, insize, test_hashsum);
+#endif
 				/* compare the incoming hash to the hash of the local file*/
 				if (strcmp(in_hashsum, test_hashsum) == 0) {
 					/* the fragments match so we should seek to the appropriate place in the
 					 * local file and set the remote file to append */
-					/* if (verbose_mode) */
-					/* 	fprintf(stderr, "%s: File fragments match\n", hostname); */
-
+#ifdef DEBUG
+					fprintf(stderr, "%s: File fragments match\n", hostname);
+					fprintf(stderr, "%s: seeking to %ld\n", hostname, insize);
+#endif
 					xfer_size = stb.st_size - insize;
-					/* if (verbose_mode) */
-					/* 	fprintf(stderr, "%s: xfer_size: %ld, stb.st_size: %ld insize: %ld\n", */
-					/* 		hostname, xfer_size, stb.st_size, insize); */
+#ifdef DEBUG
+					fprintf(stderr, "%s: xfer_size: %ld, stb.st_size: %ld insize: %ld\n",
+						hostname, xfer_size, stb.st_size, insize);
+#endif
 					if (lseek(fd, insize, SEEK_CUR) != (off_t)insize) {
-						if (verbose_mode)
-							fprintf(stderr, "%s: lseek did not return %ld\n", hostname, insize) ;
+#ifdef DEBUG
+						fprintf(stderr, "%s: lseek did not return %ld\n", hostname, insize) ;
+#endif
 						goto next;
 					}
 					match = "M";
 				} else {
 					/* the fragments don't match so we should start over from the begining */
-					/* if (verbose_mode) */
-					/* 	fprintf(stderr, "%s: File fragments do not match '%s'(in) '%s'(local)\n", */
-					/* 		hostname, in_hashsum, test_hashsum); */
+#ifdef DEBUG
+					fprintf(stderr, "%s: File fragments do not match '%s'(in) '%s'(local)\n",
+				       		hostname, in_hashsum, test_hashsum);
+#endif
 					match = "F";
 					xfer_size = stb.st_size;
 				}
 				free(in_hashsum);
 			}
 			if (*cp == 'S') { /* skip file */
-				/* if (verbose_mode) */
-				/* 	fprintf(stderr, "%s: Should be skipping this file\n", hostname); */
+#ifdef DEBUG
+				fprintf(stderr, "%s: Should be skipping this file\n", hostname);
+#endif
 				goto next;
 			}
 			if (*cp == 'C') { /*transfer entire file*/
-				/* if (verbose_mode) */
-				/* 	fprintf(stderr, "%s: Resending entire file\n", hostname); */
+#ifdef DEBUG
+				fprintf(stderr, "%s: Resending entire file\n", hostname);
+#endif
 				xfer_size = stb.st_size;
 			}
 			/* need to send the match status
 			 * We always send the match status or we get out of sync
 			 */
-			/* if (verbose_mode) */
-			/* 	fprintf(stderr, "%s: sending match %s\n", hostname, match); */
+#ifdef DEBUG
+			fprintf(stderr, "%s: sending match %s\n", hostname, match);
+#endif
 			(void) atomicio(vwrite, remout, match, 1);
 		}
 
@@ -1383,8 +1377,9 @@ next:			if (fd != -1) {
 			continue;
 		}
 
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s: going to xfer %ld\n", hostname, xfer_size); */
+#ifdef DEBUG
+		fprintf(stderr, "%s: going to xfer %ld\n", hostname, xfer_size);
+#endif
 		if (showprogress) {
 			start_progress_meter(curfile, xfer_size, &statbytes);
 		}
@@ -1401,8 +1396,6 @@ next:			if (fd != -1) {
 			}
 			/* Keep writing after error to retain sync */
 			if (haderr) {
-				/* if (verbose_mode) */
-				/* 	fprintf(stderr, "%s: had error %d\n", hostname, haderr); */
 				(void)atomicio(vwrite, remout, bp->buf, amt);
 				memset(bp->buf, 0, amt);
 				continue;
@@ -1434,9 +1427,6 @@ rsource(char *name, struct stat *statp)
 	DIR *dirp;
 	struct dirent *dp;
 	char *last, *vect[1], path[PATH_MAX];
-
-	/* if (verbose_mode) */
-	/* 	fprintf (stderr, "%s: In rsource\n", hostname); */
 
 	if (!(dirp = opendir(name))) {
 		run_err("%s: %s", name, strerror(errno));
@@ -1503,16 +1493,16 @@ sink(int argc, char **argv, const char *src)
 	char outbuf[128];
 	char match;
 	int bad_match_flag = 0;
-	np = "\0";
-	np_tmp = "\0";
+	np = '\0';
+	np_tmp = NULL;
 
 #define	atime	tv[0]
 #define	mtime	tv[1]
 #define	SCREWUP(str)	{ why = str; goto screwup; }
 
-	/* if (verbose_mode) */
-	/* 	fprintf (stderr, "%s: LOCAL In sink with %s\n", hostname, src); */
-
+#ifdef DEBUG
+	fprintf (stderr, "%s: LOCAL In sink with %s\n", hostname, src);
+#endif
 	if (TYPE_OVERFLOW(time_t, 0) || TYPE_OVERFLOW(off_t, 0))
 		SCREWUP("Unexpected off_t/time_t size");
 
@@ -1528,16 +1518,16 @@ sink(int argc, char **argv, const char *src)
 	if (targetshouldbedirectory)
 		verifydir(targ);
 
-	/* if (verbose_mode) */
-	/* 	fprintf (stderr, "%s: Sending null to remout.\n",hostname); */
-
+#ifdef DEBUG
+	fprintf (stderr, "%s: Sending null to remout.\n",hostname);
+#endif
 	(void) atomicio(vwrite, remout, "", 1);
 	if (stat(targ, &stb) == 0 && S_ISDIR(stb.st_mode))
 		targisdir = 1;
 
-	/* if (verbose_mode) */
-	/* 	fprintf(stderr, "%s: Target is %s with a size of %ld\n", hostname, targ, stb.st_size); */
-
+#ifdef DEBUG
+	fprintf(stderr, "%s: Target is %s with a size of %ld\n", hostname, targ, stb.st_size);
+#endif
 	if (src != NULL && !iamrecursive && !Tflag) {
 		/*
 		 * Prepare to try to restrict incoming filenames to match
@@ -1549,8 +1539,9 @@ sink(int argc, char **argv, const char *src)
 
 	for (first = 1;; first = 0) {
 		bad_match_flag = 0; /* used in resume mode. */
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s: position 1 buf is %s\n", hostname, buf); */
+#ifdef DEBUG
+		fprintf(stderr, "%s: At start of loop buf is %s\n", hostname, buf);
+#endif
 		cp = buf;
 		if (atomicio(read, remin, cp, 1) != 1)
 			goto done;
@@ -1578,8 +1569,9 @@ sink(int argc, char **argv, const char *src)
 			continue;
 		}
 		if (buf[0] == 'E') {
-			/* if (verbose_mode) */
-			/* 	fprintf (stderr, "%s: Sending null to remout.\n", hostname); */
+#ifdef DEBUG
+			fprintf (stderr, "%s: Sending null to remout.\n", hostname);
+#endif
 			(void) atomicio(vwrite, remout, "", 1);
 			goto done;
 		}
@@ -1587,9 +1579,9 @@ sink(int argc, char **argv, const char *src)
 			*--cp = 0;
 
 		cp = buf;
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s: buf is %s\n", hostname, buf); */
-
+#ifdef DEBUG
+		fprintf(stderr, "%s: buf is %s\n", hostname, buf);
+#endif
 		if (*cp == 'T') {
 			setimes++;
 			cp++;
@@ -1618,14 +1610,16 @@ sink(int argc, char **argv, const char *src)
 			    atime.tv_usec > 999999)
 				SCREWUP("atime.usec not delimited");
 
-			/* if (verbose_mode) */
-			/* 	fprintf (stderr, "%s: Sending null to remout.\n", hostname); */
+#ifdef DEBUG
+			fprintf (stderr, "%s: Sending null to remout.\n", hostname);
+#endif
 			(void) atomicio(vwrite, remout, "", 1);
 			continue;
 		}
 		if (*cp == 'R') { /*resume file transfer (dont' think I need this here)*/
-			/* if (verbose_mode) */
-			/* 	fprintf(stderr, "%s: Received a RESUME request with %s\n", hostname, cp); */
+#ifdef DEBUG
+			fprintf(stderr, "%s: Received a RESUME request with %s\n", hostname, cp);
+#endif
 			resume_flag = 1;
 		}
 		if (*cp != 'C' && *cp != 'D') {
@@ -1643,11 +1637,10 @@ sink(int argc, char **argv, const char *src)
 			SCREWUP("expected control record");
 		}
 		mode = 0;
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s: buf is %s\n", hostname, buf); */
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s: cp is %s\n", hostname, cp); */
-
+#ifdef DEBUG
+		fprintf(stderr, "%s: buf is %s\n", hostname, buf);
+		fprintf(stderr, "%s: cp is %s\n", hostname, cp);
+#endif
 		/* we need to track if this object is a directory
 		 * before we move the pointer. If we are in resume mode
 		 * we might endup trying to get an mdsum on a directory
@@ -1666,9 +1659,9 @@ sink(int argc, char **argv, const char *src)
 		if (*cp++ != ' ')
 			SCREWUP("mode not delimited");
 
-		/* if (verbose_mode) */
-	       	/* 	fprintf(stderr, "%s: cp is %s\n", hostname, cp); */
-
+#ifdef DEBUG
+		fprintf(stderr, "%s: cp is %s\n", hostname, cp);
+#endif
 
 		if (!isdigit((unsigned char)*cp))
 			SCREWUP("size not present");
@@ -1679,29 +1672,31 @@ sink(int argc, char **argv, const char *src)
 			SCREWUP("size out of range");
 		size = (off_t)ull;
 
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s: cp is %s\n", hostname, cp); */
-
+#ifdef DEBUG
+		fprintf(stderr, "%s: cp is %s\n", hostname, cp);
+#endif
 		if (resume_flag && !dir_flag) {
 			*remote_hashsum = '\0';
 			for (int i = 0; i < HASH_LEN; i++) {
 				strncat (remote_hashsum, cp++, 1);
 			}
-			/* if (verbose_mode) */
-			/* 	fprintf (stderr, "%s: %s\n", hostname, remote_hashsum); */
+#ifdef DEBUG
+			fprintf (stderr, "%s: %s\n", hostname, remote_hashsum);
+#endif
 			if (!cp || *cp++ != ' ')
 				SCREWUP("hash not delimited");
 		}
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s: cp is %s\n", hostname, cp); */
-
+#ifdef DEBUG
+		fprintf(stderr, "%s: cp is %s\n", hostname, cp);
+#endif
 		if (*cp == '\0' || strchr(cp, '/') != NULL ||
 		    strcmp(cp, ".") == 0 || strcmp(cp, "..") == 0) {
 			run_err("error: unexpected filename: %s", cp);
 			exit(1);
 		}
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s cp is %s\n", hostname, cp); */
+#ifdef DEBUG
+		fprintf(stderr, "%s cp is %s\n", hostname, cp);
+#endif
 		if (npatterns > 0) {
 			for (n = 0; n < npatterns; n++) {
 				if (fnmatch(patterns[n], cp, 0) == 0)
@@ -1762,13 +1757,15 @@ sink(int argc, char **argv, const char *src)
 		stat(cp, &cpstat);
 		xfer_size = size;
 		if (resume_flag) {
-			/* if (verbose_mode) */
-			/* 	fprintf(stderr, "%s: np is %s\n", hostname, np); */
+#ifdef DEBUG
+			fprintf(stderr, "%s: np is %s\n", hostname, np);
+#endif
 			/* does the file exist and if it does it writable? */
 			if (stat(np, &npstat) == -1) {
-				/* if (verbose_mode) */
-				/* 	fprintf(stderr, "%s Local file does not exist size is %ld!\n", */
-				/* 		hostname, npstat.st_size); */
+#ifdef DEBUG
+				fprintf(stderr, "%s Local file does not exist size is %ld!\n",
+					hostname, npstat.st_size);
+#endif
 				npstat.st_size = 0;
 			} else {
 				/* check to see if the file is writeable
@@ -1794,22 +1791,25 @@ sink(int argc, char **argv, const char *src)
 				calculate_hash(np, local_hashsum, npstat.st_size);
 				if (strcmp(local_hashsum,remote_hashsum) == 0) {
 					/* we can skip this file if we want to. */
-					/* if (verbose_mode) */
-					/* 	fprintf(stderr, "%s: Files are the same\n", hostname); */
+#ifdef DEBUG
+					fprintf(stderr, "%s: Files are the same\n", hostname);
+#endif
 					/* the remote is expecting something so we need to send them something*/
 					snprintf(outbuf, 128, "S%-126s", " ");
 					(void)atomicio(vwrite, remout, outbuf, strlen(outbuf));
-					/* if (verbose_mode) */
-					/* 	fprintf(stderr,"%s: sent '%s' to remote\n", hostname, outbuf); */
+#ifdef DEBUG
+					fprintf(stderr,"%s: sent '%s' to remote\n", hostname, outbuf);
+#endif
 					/* the remote is waiting on an ack so send a null */
 					(void)atomicio(vwrite, remout, "", 1);
 					fprintf (stderr, "Skipping identical file: %s\n", np);
 					continue;
 				} else {
 					/* file sizes are the same but they don't match */
-					/* if (verbose_mode) */
-					/* 	fprintf(stderr, "%s: target(%ld) is different than source(%ld)!\n", */
-					/* 		hostname, npstat.st_size, size); */
+#ifdef DEBUG
+					fprintf(stderr, "%s: target(%ld) is different than source(%ld)!\n",
+						hostname, npstat.st_size, size);
+#endif
 					snprintf(tmpbuf, sizeof outbuf, "C%04o %lld %s",
 						 (u_int) (npstat.st_mode & FILEMODEMASK),
 						 (long long)npstat.st_size, local_hashsum);
@@ -1822,60 +1822,66 @@ sink(int argc, char **argv, const char *src)
 			 * we have to move it. Since we are in resume mode treat it as a resume */
 			if (npstat.st_size < xfer_size || (npstat.st_size == 0)) {
 				char rand_string[9];
-				/* if (verbose_mode) */
-				/* 	fprintf (stderr, "%s: %s is smaller than %s\n", hostname, np, cp); */
+#ifdef DEBUG
+				fprintf (stderr, "%s: %s is smaller than %s\n", hostname, np, cp);
+#endif
 				calculate_hash(np, local_hashsum, npstat.st_size);
 #define	FILEMODEMASK	(S_ISUID|S_ISGID|S_IRWXU|S_IRWXG|S_IRWXO)
 				snprintf(tmpbuf, sizeof outbuf, "R%04o %lld %s",
 					 (u_int) (npstat.st_mode & FILEMODEMASK),
 					 (long long)npstat.st_size, local_hashsum);
 				snprintf(outbuf, 128, "%-127s", tmpbuf);
-				/* if (verbose_mode) */
-				/* 	fprintf (stderr, "%s: new buf is %s of length %ld\n", */
-				/* 		 hostname, outbuf, strlen(outbuf)); */
-				/* if (verbose_mode) */
-				/* 	fprintf(stderr, "%s: Sending new file (%s) modes: %s\n", */
-				/* 		hostname, np, outbuf); */
+#ifdef DEBUG
+				fprintf (stderr, "%s: new buf is %s of length %ld\n",
+					 hostname, outbuf, strlen(outbuf));
+				fprintf(stderr, "%s: Sending new file (%s) modes: %s\n",
+					hostname, np, outbuf);
+#endif
 				/*now we have to send np's length and hash to the other end
 				 * if the computed hashes match then we seek to np's length in
 				 * file and append to np starting from there */
 				(void) atomicio(vwrite, remout, outbuf, strlen(outbuf));
-				/* if (verbose_mode) */
-				/* 	fprintf(stderr, "%s: New size: %ld, size: %ld, st_size: %ld\n", */
-				/* 		hostname, size - npstat.st_size, size, npstat.st_size); */
+#ifdef DEBUG
+				fprintf(stderr, "%s: New size: %ld, size: %ld, st_size: %ld\n",
+					hostname, size - npstat.st_size, size, npstat.st_size);
+#endif
 				xfer_size = size - npstat.st_size;
 				resume_flag = 1;
-				np_tmp = strndup(np, strlen(np));
+				np_tmp = xstrdup(np);
 				/* We should have a random component to avoid clobbering a
 				 * local file */
 				rand_str(rand_string, 8);
-				strncat(np, rand_string, 9); /* 8 + 1 for the null */
-				/* if (verbose_mode) */
-				/* 	fprintf(stderr, "%s: Will concat %s to %s after xfer\n", */
-				/* 		hostname, np, np_tmp); */
+				strcat(np, rand_string);
+#ifdef DEBUG
+				fprintf(stderr, "%s: Will concat %s to %s after xfer\n",
+					hostname, np, np_tmp);
+#endif
 			} else if (npstat.st_size > size) {
 			/* the target file is larger than the source.
-			 * so we need to overwrite it */
-				/* if (verbose_mode) */
-				/* 	fprintf(stderr, "%s: target(%ld) is larger than source(%ld)!\n", */
-				/* 		hostname, npstat.st_size, size); */
-				snprintf(tmpbuf, sizeof outbuf, "C%04o %lld %s",
+			 * so we need to overwrite it. We don't need to send the hash though. */
+#ifdef DEBUG
+				fprintf(stderr, "%s: target(%ld) is larger than source(%ld)!\n",
+					hostname, npstat.st_size, size);
+#endif
+				snprintf(tmpbuf, sizeof outbuf, "C%04o %lld",
 					 (u_int) (npstat.st_mode & FILEMODEMASK),
-					 (long long)npstat.st_size, local_hashsum);
+					 (long long)npstat.st_size);
 				snprintf(outbuf, 128, "%-127s", tmpbuf);
 				(void) atomicio(vwrite, remout, outbuf, strlen(outbuf));
 				bad_match_flag = 1;
 			}
 
-			/* if (verbose_mode) */
-			/* 	fprintf (stderr, "%s: CP is %s(%ld) NP is %s(%ld)\n", */
-			/* 		 hostname, cp, size, np, npstat.st_size); */
+#ifdef DEBUG
+			fprintf (stderr, "%s: CP is %s(%ld) NP is %s(%ld)\n",
+				 hostname, cp, size, np, npstat.st_size);
+#endif
 			/* we are in resume mode so we need this *here* and not later
 			 * because we need to get the file match information from the remote
 			 * outside of resume mode we don't get that so we get out of sync
 			 * so we have a test for the resume_flag after this block */
-			/* if (verbose_mode) */
-			/* 	fprintf (stderr, "%s: Sending null to remout.\n", hostname); */
+#ifdef DEBUG
+			fprintf (stderr, "%s: Sending null to remout.\n", hostname);
+#endif
 			(void) atomicio(vwrite, remout, "", 1);
 
 			/* the remote is always going to send a match status
@@ -1883,33 +1889,41 @@ sink(int argc, char **argv, const char *src)
 			(void) atomicio(read, remin, &match, 1);
 			if (match != 'M') {/*fragments do not match*/
 				/* expected response of F, M and NULL *but*
-				 * anything other than M is a failure */
+				 * anything other than M is a failure
+				 * if it's a NULL then we reset xfer_size but
+				 * we retain the file pointers */
 				xfer_size = size;
 				bad_match_flag = 1;
 				if (match == 'F') {
 					/* got an F for failure and not NULL
 					 * so we want to swap over the filename from
 					 * the temp back to the original */
-					/* if (verbose_mode) */
-					/* 	fprintf(stderr, "%s: match status is F\n", hostname); */
+#ifdef DEBUG
+					fprintf(stderr, "%s: match status is F\n", hostname);
+#endif
 					if (np_tmp != NULL)
-						np = strndup(np_tmp, strlen(np_tmp));
+						np = np_tmp;
 					else {
 						continue;
 					}
-
+				} else {
+#ifdef DEBUG
+					fprintf(stderr, "%s: match received is NULL\n", hostname);
+#endif
 				}
 			} else {
-				/* if (verbose_mode) */
-				/* 	fprintf(stderr, "%s match status is M\n", hostname); */
+#ifdef DEBUG
+				fprintf(stderr, "%s match status is M\n", hostname);
+#endif
 				bad_match_flag = 0; /* while this is set at the beginning of the
                                                      * loop I'm setting it here explicitly as well */
 			}
 		}
 
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s: Creating file. mode is %d for %s\n", */
-		/* 		hostname, mode, np); */
+#ifdef DEBUG
+		fprintf(stderr, "%s: Creating file. mode is %d for %s\n",
+			hostname, mode, np);
+#endif
 		if ((ofd = open(np, O_WRONLY|O_CREAT, mode)) == -1) {
 bad:			run_err("%s: %s", np, strerror(errno));
 			continue;
@@ -1920,8 +1934,9 @@ bad:			run_err("%s: %s", np, strerror(errno));
 		 * why? because scp is weird and depends on an intricate and silly dance of
 		 * call and response at just the right time. That's why */
 		if (!resume_flag) {
-			/* if (verbose_mode) */
-			/* 	fprintf (stderr, "%s: Sending null to remout.\n", hostname); */
+#ifdef DEBUG
+			fprintf (stderr, "%s: Sending null to remout.\n", hostname);
+#endif
 			(void) atomicio(vwrite, remout, "", 1);
 		}
 
@@ -1941,9 +1956,9 @@ bad:			run_err("%s: %s", np, strerror(errno));
 		if (showprogress)
 			start_progress_meter(curfile, xfer_size, &statbytes);
 		set_nonblock(remin);
-		/* if (verbose_mode) */
-		/* 	fprintf(stderr, "%s: xfer_size is %ld\n", hostname, xfer_size); */
-
+#ifdef DEBUG
+		fprintf(stderr, "%s: xfer_size is %ld\n", hostname, xfer_size);
+#endif
 		for (count = i = 0; i < xfer_size; i += bp->cnt) {
 			amt = bp->cnt;
 			if (i + amt > xfer_size)
@@ -1989,9 +2004,10 @@ bad:			run_err("%s: %s", np, strerror(errno));
 
                 /* if np_tmp isn't set then we don't have a resume file to cat */
 		/* likewise, bad match flag means no resume flag */
-		/* if (verbose_mode) */
-		/* 	fprintf (stderr, "%s: resume_flag: %d, np_tmp: %s, bad_match_flag: %d\n", */
-		/* 		 hostname, resume_flag, np_tmp, bad_match_flag); */
+#ifdef DEBUG
+		fprintf (stderr, "%s: resume_flag: %d, np_tmp: %s, bad_match_flag: %d\n",
+			 hostname, resume_flag, np_tmp, bad_match_flag);
+#endif
 		if (resume_flag && np_tmp && !bad_match_flag) {
 			FILE *orig, *resume;
 			char res_buf[512]; /* set at 512 just because, might want to increase*/
@@ -2001,10 +2017,10 @@ bad:			run_err("%s: %s", np, strerror(errno));
 			*res_buf = '\0';
 			orig = NULL; /*supress warnings*/
 			resume = NULL; /*supress warnings*/
-
-			/* if (verbose_mode) */
-			/* 	fprintf(stderr, "%s: Resume flag is set. Going to concat %s to %s  now\n", */
-			/* 		hostname, np, np_tmp); */
+#ifdef DEBUG
+			fprintf(stderr, "%s: Resume flag is set. Going to concat %s to %s  now\n",
+				hostname, np, np_tmp);
+#endif
 			/* np/ofd is the resume file so open np_tmp for appending
 			 * close ofd because we are going to be shifting it
 			 * and I don't wnat the same file open in multiple descriptors */
@@ -2041,20 +2057,20 @@ stopcat:		if (orig)
 				fclose(resume);
 			/* delete the resume file */
 			remove(np);
-			/* if (verbose_mode) */
-			/* 	fprintf (stderr, "%s: np(%s) and np_tmp(%s)\n", hostname, np, np_tmp); */
+#ifdef DEBUG
+			fprintf (stderr, "%s: np(%s) and np_tmp(%s)\n", hostname, np, np_tmp);
+#endif
 			np = np_tmp;
-			/* if (verbose_mode) */
-			/* 	fprintf (stderr, "%s np(%s) and np_tmp(%s)\n", hostname, np, np_tmp); */
+#ifdef DEBUG
+			fprintf (stderr, "%s np(%s) and np_tmp(%s)\n", hostname, np, np_tmp);
+#endif
 			/* reset ofd to the original np */
 			if ((ofd = open(np_tmp, O_WRONLY)) == -1) {
-				free(np_tmp);
 				fprintf(stderr, "%s: couldn't open %s in append function\n", hostname, np_tmp);
 				atomicio(vwrite, remout, "", 1);
 				goto bad;
 			}
 		}
-
 		if (pflag) {
 			if (exists || omode != mode)
 #ifdef HAVE_FCHMOD
@@ -2090,11 +2106,15 @@ stopcat:		if (orig)
 		}
 		/* If no error was noted then signal success for this file */
 		if (note_err(NULL) == 0) {
-			/* if (verbose_mode) */
-			/* 	fprintf (stderr, "%s: Sending null to remout.\n", hostname); */
+#ifdef DEBUG
+			fprintf (stderr, "%s: Sending null to remout.\n", hostname);
+#endif
 			(void) atomicio(vwrite, remout, "", 1); }
-		if (resume_flag && np_tmp)
+		/* we are in resume mode and we have allocated memory for np_tmp */
+		if (resume_flag && np_tmp != NULL) {
 			free(np_tmp);
+			np_tmp = NULL;
+		}
         }
 done:
 	for (n = 0; n < npatterns; n++)
@@ -2125,7 +2145,6 @@ response(void)
 	default:
 		*cp++ = resp;
 		/* FALLTHROUGH */
-		__attribute__((fallthrough));
 	case 1:		/* error, followed by error msg */
 	case 2:		/* fatal error, "" */
 		do {
