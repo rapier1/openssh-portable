@@ -1118,9 +1118,10 @@ tolocal(int argc, char **argv)
  * ends have xxhash installed and then dealing with fallbacks */
 void calculate_hash(char *filename, char *output, off_t length)
 {
-#define HASH_LEN 128 /*40 sha1, 64 blake2s256 128 blake2b512*/
+#define HASH_LEN 128               /*40 sha1, 64 blake2s256 128 blake2b512*/
 #define BUF_AND_HASH HASH_LEN + 64 /* length of the hash and other data to get size of buffer */
-#define HASH_BUFLEN 8192	/* 8192 seems to be a good balance between freads and the digest func*/
+#define HASH_BUFLEN 8192	   /* 8192 seems to be a good balance between freads 
+				    * and the digest func*/
 	int n, md_len;
 	EVP_MD_CTX *c;
 	const EVP_MD *md;
@@ -1648,7 +1649,7 @@ sink(int argc, char **argv, const char *src)
 #endif
 		/* we need to track if this object is a directory
 		 * before we move the pointer. If we are in resume mode
-		 * we might endup trying to get an mdsum on a directory
+		 * we might end up trying to get an mdsum on a directory
 		 * and that doesn't work */
 		int dir_flag = 0;
 		if (*cp == 'D')
