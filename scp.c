@@ -1113,15 +1113,18 @@ tolocal(int argc, char **argv)
 
 /* calculate the hash of a file up to length bytes
  * this is used to determine if remote and local file
- * fragments match. There may be a more efficient process for the hashing */
+ * fragments match. There may be a more efficient process for the hashing 
+ * TODO: I'd like to XXHash for the hashing but that requires that both
+ * ends have xxhash installed and then dealing with fallbacks */
 void calculate_hash(char *filename, char *output, off_t length)
 {
-#define HASH_LEN 64 /*40 sha1, 64 blake2s256*/
-#define hash_buflen 1024	/* 1024 is an arbitrary size */
+#define HASH_LEN 128 /*40 sha1, 64 blake2s256 128 blake2b512*/
+#define BUF_AND_HASH HASH_LEN + 64 /* length of the hash and other data to get size of buffer */
+#define HASH_BUFLEN 8192	/* 8192 seems to be a good balance between freads and the digest func*/
 	int n, md_len;
 	EVP_MD_CTX *c;
 	const EVP_MD *md;
-	char buf[hash_buflen];
+	char buf[HASH_BUFLEN];
 	ssize_t bytes;
 	unsigned char out[EVP_MAX_MD_SIZE];
 	char tmp[3];
@@ -1140,24 +1143,26 @@ void calculate_hash(char *filename, char *output, off_t length)
 		return;
 	}
 
-	md = EVP_get_digestbyname("blake2s256");
+	md = EVP_get_digestbyname("blake2b512");
 	c = EVP_MD_CTX_new();
 	EVP_DigestInit_ex(c, md, NULL);
 
 	while (length > 0) {
-		if (length > hash_buflen)
-			bytes=fread(buf, 1, hash_buflen, file_ptr);
+		if (length > HASH_BUFLEN)
+			/* fread returns the number of elements read. 
+			 * in this case 1. Multiply by the length to get the bytes */
+			bytes=fread(buf, HASH_BUFLEN, 1, file_ptr) * HASH_BUFLEN;
 		else
-			bytes=fread(buf, 1, length, file_ptr);
+			bytes=fread(buf, length, 1, file_ptr) * length;
 		EVP_DigestUpdate(c, buf, bytes);
-		length -= hash_buflen;
+		length -= HASH_BUFLEN;
 	}
-	EVP_DigestFinal_ex(c, out, &md_len);
+	EVP_DigestFinal(c, out, &md_len);
 	EVP_MD_CTX_free(c);
 	/* convert the hash into a string */
 	for(n=0; n < md_len; n++) {
 		snprintf(tmp, 3, "%02x", out[n]);
-		strcat(output, tmp);
+		strncat(output, tmp, 3);
 	}
 #ifdef DEBUG
 	fprintf(stderr, "%s: HASH IS '%s' of length %ld\n", hostname, output, strlen(output));
@@ -1179,10 +1184,10 @@ source(int argc, char **argv)
 	off_t i, statbytes, xfer_size;
 	size_t amt, nr;
 	int fd = -1, haderr, indx;
-	char *cp, *last, *name, buf[PATH_MAX + 128], encname[PATH_MAX];
+	char *cp, *last, *name, buf[PATH_MAX + BUF_AND_HASH], encname[PATH_MAX];
 	int len;
 	char hashsum[HASH_LEN], test_hashsum[HASH_LEN];
-	char inbuf[PATH_MAX + 128];
+	char inbuf[PATH_MAX + BUF_AND_HASH];
 	size_t insize;
 	unsigned long long ull;
 	char *match; /* used to communicate fragment match */
@@ -1262,7 +1267,7 @@ syserr:			run_err("%s: %s", name, strerror(errno));
 		fprintf(stderr, "%s: inbuf length %ld buf length %ld\n", hostname, strlen(inbuf), strlen(buf));
 #endif
 		if (resume_flag) { /* get the hash response from the remote */
-			(void) atomicio(read, remin, inbuf, 127);
+			(void) atomicio(read, remin, inbuf, BUF_AND_HASH - 1);
 #ifdef DEBUG
 				fprintf(stderr, "%s: we got '%s' in inbuf length %ld buf was %ld\n",
 					hostname, inbuf, strlen(inbuf), strlen(buf));
@@ -1489,8 +1494,8 @@ sink(int argc, char **argv, const char *src)
 	struct timeval tv[2];
 	char remote_hashsum[HASH_LEN+1];
 	char local_hashsum[HASH_LEN+1];
-	char tmpbuf[128];
-	char outbuf[128];
+	char tmpbuf[BUF_AND_HASH];
+	char outbuf[BUF_AND_HASH];
 	char match;
 	int bad_match_flag = 0;
 	np = '\0';
@@ -1681,7 +1686,7 @@ sink(int argc, char **argv, const char *src)
 				strncat (remote_hashsum, cp++, 1);
 			}
 #ifdef DEBUG
-			fprintf (stderr, "%s: %s\n", hostname, remote_hashsum);
+			fprintf (stderr, "%s: '%s'\n", hostname, remote_hashsum);
 #endif
 			if (!cp || *cp++ != ' ')
 				SCREWUP("hash not delimited");
@@ -1771,11 +1776,13 @@ sink(int argc, char **argv, const char *src)
 				/* check to see if the file is writeable
 				 * if it isn't then we need to skip it but
 				 * before we skip it we need to send the remote
-				 * what they are expecting so 128 bytes and then
-				 * a null */
+				 * what they are expecting so BUF_AND_HASH bytes and then
+				 * a null.
+				 * NOTE!!! The format in the snprintf needs the actual numeric
+				 * because using a define isn't working */
 				if (access (np, W_OK) != 0) {
 					fprintf(stderr, "scp: %s: Permission denied on %s\n", np, hostname);
-					snprintf(outbuf, 128, "S%-126s", " ");
+					snprintf(outbuf, BUF_AND_HASH, "S%-*s", BUF_AND_HASH-2, " ");
 					(void)atomicio(vwrite, remout, outbuf, strlen(outbuf));
 					(void)atomicio(vwrite, remout, "", 1);
 					continue;
@@ -1795,14 +1802,15 @@ sink(int argc, char **argv, const char *src)
 					fprintf(stderr, "%s: Files are the same\n", hostname);
 #endif
 					/* the remote is expecting something so we need to send them something*/
-					snprintf(outbuf, 128, "S%-126s", " ");
+					snprintf(outbuf, BUF_AND_HASH, "S%-*s", BUF_AND_HASH-2, " ");
 					(void)atomicio(vwrite, remout, outbuf, strlen(outbuf));
 #ifdef DEBUG
 					fprintf(stderr,"%s: sent '%s' to remote\n", hostname, outbuf);
 #endif
 					/* the remote is waiting on an ack so send a null */
 					(void)atomicio(vwrite, remout, "", 1);
-					fprintf (stderr, "Skipping identical file: %s\n", np);
+					if (showprogress)
+						fprintf (stderr, "Skipping identical file: %s\n", np);
 					continue;
 				} else {
 					/* file sizes are the same but they don't match */
@@ -1813,7 +1821,7 @@ sink(int argc, char **argv, const char *src)
 					snprintf(tmpbuf, sizeof outbuf, "C%04o %lld %s",
 						 (u_int) (npstat.st_mode & FILEMODEMASK),
 						 (long long)npstat.st_size, local_hashsum);
-					snprintf(outbuf, 128, "%-127s", tmpbuf);
+					snprintf(outbuf, BUF_AND_HASH, "%-*s", BUF_AND_HASH-1, tmpbuf);
 					(void) atomicio(vwrite, remout, outbuf, strlen(outbuf));
 					bad_match_flag = 1;
 				}
@@ -1830,7 +1838,7 @@ sink(int argc, char **argv, const char *src)
 				snprintf(tmpbuf, sizeof outbuf, "R%04o %lld %s",
 					 (u_int) (npstat.st_mode & FILEMODEMASK),
 					 (long long)npstat.st_size, local_hashsum);
-				snprintf(outbuf, 128, "%-127s", tmpbuf);
+				snprintf(outbuf, BUF_AND_HASH, "%-*s", BUF_AND_HASH-1, tmpbuf);
 #ifdef DEBUG
 				fprintf (stderr, "%s: new buf is %s of length %ld\n",
 					 hostname, outbuf, strlen(outbuf));
@@ -1866,7 +1874,7 @@ sink(int argc, char **argv, const char *src)
 				snprintf(tmpbuf, sizeof outbuf, "C%04o %lld",
 					 (u_int) (npstat.st_mode & FILEMODEMASK),
 					 (long long)npstat.st_size);
-				snprintf(outbuf, 128, "%-127s", tmpbuf);
+				snprintf(outbuf, BUF_AND_HASH, "%-*s", BUF_AND_HASH-1, tmpbuf);
 				(void) atomicio(vwrite, remout, outbuf, strlen(outbuf));
 				bad_match_flag = 1;
 			}
