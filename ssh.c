@@ -2081,7 +2081,7 @@ hpn_options_init(struct ssh *ssh)
 
 	if (tty_flag)
 		options.hpn_buffer_size = CHAN_SES_WINDOW_DEFAULT;
-	else
+	else if (options.hpn_buffer_size <= 0) /* use value from config file if present */
 		options.hpn_buffer_size = 2 * 1024 * 1024;
 
 	if (ssh->compat & SSH_BUG_LARGEWINDOW) {
