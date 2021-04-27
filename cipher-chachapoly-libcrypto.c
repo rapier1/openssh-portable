@@ -34,7 +34,7 @@
 #include "sshbuf.h"
 #include "ssherr.h"
 #include "cipher-chachapoly.h"
-#include "thpool.h"
+#include "pthread_pool.h"
 
 #define POKE_U32_LITTLE(p, v)			\
         do { \
@@ -53,42 +53,18 @@ struct chachapoly_ctx {
 };
 
 struct chachathread {
-	u_int index;
 	u_char *dest;
 	const u_char *src;
 	u_int len;
 	u_int offset;
 	u_char seqbuf[16];
 	struct chachapoly_ctx *ctx;
-	int ctx_init;
 	int response;
 } chachathread;
 
-static CRYPTO_ONCE once = CRYPTO_ONCE_STATIC_INIT;
-static CRYPTO_RWLOCK *cryptolock;
-
-//int total = 0;
-//int joined = 0;
-pthread_mutex_t lock;
-pthread_cond_t cond;
-int tcount = 0;
 void *thpool = NULL;
-#define MAX_THREADS 16
+#define MAX_THREADS 12
 struct chachathread thread[MAX_THREADS-1];
-
-static void myinit(void) {
-	cryptolock = CRYPTO_THREAD_lock_new();
-}
-
-static int mylock(void) {
-	if (!CRYPTO_THREAD_run_once(&once, *myinit) || cryptolock == NULL)
-		return 0;
-	return CRYPTO_THREAD_write_lock(cryptolock);
-}
-
-static int myunlock(void) {
-	return CRYPTO_THREAD_unlock(cryptolock);
-}
 
 struct chachapoly_ctx *
 chachapoly_new(const u_char *key, u_int keylen)
@@ -128,21 +104,18 @@ chachapoly_free(struct chachapoly_ctx *cpctx)
 }
 
 /* threaded function */
-void chachapoly_thread_work(void *thread) {
+void *chachapoly_thread_work(void *thread) {
 	struct chachathread *lt = (struct chachathread *)thread;
-	//if (mylock()) {
 	if (!EVP_CipherInit(lt->ctx->main_evp, NULL, NULL, lt->seqbuf, 1) ||
 	    EVP_Cipher(lt->ctx->main_evp, lt->dest + lt->offset,
 		       lt->src + lt->offset, lt->len) < 0)
 	{
-		fprintf(stderr, "Crypto error in thread %d\n", lt->index);
+		/* not current doing anythign with this
+		 * how to we get error notices back to the main thread? */
 		lt->response = SSH_ERR_LIBCRYPTO_ERROR;
 	}
-	//	myunlock();
-	//} else {
-	//	fprintf (stderr, "FAILED TO GET CRYPTO LOCK\n");
-	//}
 	explicit_bzero(lt->seqbuf, sizeof(lt->seqbuf));
+	return (NULL);
 }
 
 /*
@@ -161,6 +134,7 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 	u_char seqbuf[16]; /* layout: u64 counter || u64 seqno */
 	int r = SSH_ERR_INTERNAL_ERROR;
 	u_char expected_tag[POLY1305_TAGLEN], poly_key[POLY1305_KEYLEN];
+	u_int chunk = 64*64; /* cc20 block size is 64 bytes */
 	
 	/*
 	 * Run ChaCha20 once to generate the Poly1305 key. The IV is the
@@ -203,21 +177,19 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 	   dest at the appropriate byte location. 
 	 */
 
-	u_int chunk = 128*64; /* cc20 block size is 64bytes */
 	if (len >= chunk) { /* if the length of the inbound datagram is less than */
 		            /* the chunk size don't bother with threading. */ 
 		u_int bufptr = 0; // track where we are in the buffer
 		int i = 0; // iterator
 		if (thpool == NULL) {
-			thpool = thpool_init(3);
+			thpool = pool_start(chachapoly_thread_work, 2);
 		}
-		
+
 		while (bufptr < len) {
 			/* when ctx is reset with a new key we need to 
 			 * reinit the ctxs we are using in the threads */
 			if (ctx->reset) {
 				thread[i].ctx = chachapoly_new(ctx->key, ctx->keylen);
-				thread[i].ctx_init = 1;
 				/* init seqbuf to 0 */
 				memset(thread[i].seqbuf, 0, sizeof(seqbuf));
 			}
@@ -231,17 +203,18 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 				thread[i].len = len-bufptr;
 				bufptr = len;
 			}
-			thread[i].index = i;
 			thread[i].src = src;
 			thread[i].dest = dest;
-			thpool_add_work(thpool, chachapoly_thread_work, &thread[i]);
+			pool_enqueue(thpool, &thread[i], 0);
 			i++;
-		} 
+		}
 		/* if the ctx has been reset then we need to set
 		 * this back to 0. It will be set to 1 on the next reset */
 		if (ctx->reset)
 			ctx->reset = 0;
-		thpool_wait(thpool);
+		while (pool_count(thpool)) {
+			/* sit and spin */
+		}
 	} else { /*non threaded cc20 method*/
 		seqbuf[0] = 1; // set the cc20 sequence counter to 1
 		if (!EVP_CipherInit(ctx->main_evp, NULL, NULL, seqbuf, 1)) {
