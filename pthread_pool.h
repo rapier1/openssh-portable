@@ -1,5 +1,9 @@
 /** \file
  * This file provides prototypes for an implementation of a pthread pool.
+ * Based on pthread_pool by Jon Gjengset found at https://github.com/jonhoo/pthread_pool
+ * This version is stripped down and makes use of _Atomic for inc/decrements
+ * Author: Chris Rapier (rapier@psc.edu)
+ * License: MIT License
  */
 
 #ifndef __PTHREAD_POOL_H__
@@ -25,21 +29,12 @@ void * pool_start(void * (*thread_func)(void *), unsigned int threads);
  */
 void pool_enqueue(void *pool, void *arg, char free);
 
-/**
- * Wait for all queued tasks to be completed.
- */
-void pool_wait(void *pool);
-
-/**
- * Stop all threads in the pool.
+/** 
+ * Returns a count of in process and outstanding jobs
  *
- * Note that this function will block until all threads have terminated.
- * All queued items will also be freed, along with the pool itself.
- * Remaining work item arguments will be freed depending on the free argument to
- * pool_enqueue.
- */
-void pool_end(void *pool);
-
+ * \param pool A thread pool returned by start_pool.
+ * \return An int corresponding to the number of outstanding jobs. 
+*/
 int pool_count(void *pool);
 
 #endif
