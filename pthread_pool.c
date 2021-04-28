@@ -32,7 +32,7 @@ void * pool_start(void * (*thread_func)(void *), unsigned int threads) {
 	pthread_mutex_init(&p->q_mtx, &attr);
 #else
 	pthread_mutex_init(&p->q_mtx, NULL);
-#endif	
+#endif
 	pthread_cond_init(&p->q_cnd, NULL);
 	p->fn = thread_func;
 	p->remaining = 0;

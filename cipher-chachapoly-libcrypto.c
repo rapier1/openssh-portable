@@ -113,7 +113,7 @@ void *chachapoly_thread_work(void *thread) {
 		fatal("Threaded Chacha20 libcrypto error.");
 	}
 	explicit_bzero(lt->seqbuf, sizeof(lt->seqbuf));
-	return (NULL);
+	return NULL;
 }
 
 /*
@@ -178,24 +178,27 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 	if (len >= chunk) { /* if the length of the inbound datagram is less than */
 		            /* the chunk size don't bother with threading. */
 		u_int bufptr = 0; // track where we are in the buffer
-		int i; // iterator
+		int i = 0; // iterator
+
 		if (thpool == NULL) {
 			thpool = pool_start(chachapoly_thread_work, 2);
 		}
 
 		/* when ctx is reset with a new key we need to
-		 * reinit the ctxs we are using in the threads 
-		 * NB: CTX reset is true when we first need to 
-		 * init these. 
+		 * reinit the ctxs we are using in the threads
+		 * NB: CTX reset is true when we first need to
+		 * init these.
 		 */
 		if (ctx->reset) {
-			for (i = 0; i < MAX_THREADS; i++) {
-				thread[i].ctx = chachapoly_new(ctx->key, ctx->keylen);
+			for (int j = 0; j < MAX_THREADS; j++) {
+				thread[j].ctx = chachapoly_new(ctx->key, ctx->keylen);
 				/* init seqbuf to 0 */
-				memset(thread[i].seqbuf, 0, sizeof(seqbuf));
+				memset(thread[j].seqbuf, 0, sizeof(seqbuf));
 			}
+			ctx->reset = 0;
+			fprintf(stderr, "ctx init\n");
 		}
-		i = 0;
+
 		while (bufptr < len) {
 			POKE_U64(thread[i].seqbuf + 8, seqnr);
 			POKE_U32_LITTLE(thread[i].seqbuf, (bufptr/64) + 1);
@@ -214,12 +217,7 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 			if (i >= MAX_THREADS) {
 				/* something should happen here */
 			}
-				
 		}
-		/* if the ctx has been reset then we need to set
-		 * this back to 0. It will be set to 1 on the next reset */
-		if (ctx->reset)
-			ctx->reset = 0;
 		while (pool_count(thpool)) {
 			/* sit and spin */
 		}
