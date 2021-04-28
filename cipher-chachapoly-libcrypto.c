@@ -59,12 +59,11 @@ struct chachathread {
 	u_int offset;
 	u_char seqbuf[16];
 	struct chachapoly_ctx *ctx;
-	int response;
 } chachathread;
 
 void *thpool = NULL;
 #define MAX_THREADS 12
-struct chachathread thread[MAX_THREADS-1];
+struct chachathread thread[MAX_THREADS];
 
 struct chachapoly_ctx *
 chachapoly_new(const u_char *key, u_int keylen)
@@ -110,9 +109,8 @@ void *chachapoly_thread_work(void *thread) {
 	    EVP_Cipher(lt->ctx->main_evp, lt->dest + lt->offset,
 		       lt->src + lt->offset, lt->len) < 0)
 	{
-		/* not current doing anythign with this
-		 * how to we get error notices back to the main thread? */
-		lt->response = SSH_ERR_LIBCRYPTO_ERROR;
+		/* is there anything more we can tell the user? */
+		fatal("Threaded Chacha20 libcrypto error.");
 	}
 	explicit_bzero(lt->seqbuf, sizeof(lt->seqbuf));
 	return (NULL);
@@ -135,7 +133,7 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 	int r = SSH_ERR_INTERNAL_ERROR;
 	u_char expected_tag[POLY1305_TAGLEN], poly_key[POLY1305_KEYLEN];
 	u_int chunk = 64*64; /* cc20 block size is 64 bytes */
-	
+
 	/*
 	 * Run ChaCha20 once to generate the Poly1305 key. The IV is the
 	 * packet sequence number.
@@ -169,30 +167,36 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 		}
 	}
 
-	/* 
+	/*
 	   basic premise. You have an inbound 'src' and an outbound 'dest'
-	   src has the enclear data and dest holds the crypto data. Take the 
-	   src data and break it down into chunks and process each of those chunk 
-	   in parallel. The resulting crypto'd chunk can then just be slotted into 
-	   dest at the appropriate byte location. 
+	   src has the enclear data and dest holds the crypto data. Take the
+	   src data and break it down into chunks and process each of those chunk
+	   in parallel. The resulting crypto'd chunk can then just be slotted into
+	   dest at the appropriate byte location.
 	 */
 
 	if (len >= chunk) { /* if the length of the inbound datagram is less than */
-		            /* the chunk size don't bother with threading. */ 
+		            /* the chunk size don't bother with threading. */
 		u_int bufptr = 0; // track where we are in the buffer
-		int i = 0; // iterator
+		int i; // iterator
 		if (thpool == NULL) {
 			thpool = pool_start(chachapoly_thread_work, 2);
 		}
 
-		while (bufptr < len) {
-			/* when ctx is reset with a new key we need to 
-			 * reinit the ctxs we are using in the threads */
-			if (ctx->reset) {
+		/* when ctx is reset with a new key we need to
+		 * reinit the ctxs we are using in the threads 
+		 * NB: CTX reset is true when we first need to 
+		 * init these. 
+		 */
+		if (ctx->reset) {
+			for (i = 0; i < MAX_THREADS; i++) {
 				thread[i].ctx = chachapoly_new(ctx->key, ctx->keylen);
 				/* init seqbuf to 0 */
 				memset(thread[i].seqbuf, 0, sizeof(seqbuf));
 			}
+		}
+		i = 0;
+		while (bufptr < len) {
 			POKE_U64(thread[i].seqbuf + 8, seqnr);
 			POKE_U32_LITTLE(thread[i].seqbuf, (bufptr/64) + 1);
 			thread[i].offset = aadlen + bufptr;
@@ -207,6 +211,10 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 			thread[i].dest = dest;
 			pool_enqueue(thpool, &thread[i], 0);
 			i++;
+			if (i >= MAX_THREADS) {
+				/* something should happen here */
+			}
+				
 		}
 		/* if the ctx has been reset then we need to set
 		 * this back to 0. It will be set to 1 on the next reset */
