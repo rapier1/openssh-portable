@@ -47,23 +47,24 @@
 
 struct chachapoly_ctx {
 	EVP_CIPHER_CTX *main_evp, *header_evp;
-	const u_char *key;
+	const u_char *key; /* pointer to key to pass to job's ctx init*/
 	int keylen;
-	int reset;
+	int reset; /* has the cipher been reset with new keys */
 };
 
-struct chachathread {
-	u_char *dest;
-	const u_char *src;
-	u_int len;
-	u_int offset;
-	u_char seqbuf[16];
-	struct chachapoly_ctx *ctx;
-} chachathread;
+struct chachajob {
+	u_char *dest; /* pointer to dest */
+	const u_char *src; /* pointer to source */
+	u_int len; /* length of src/dest chunk */
+	u_int offset; /* position within src and dest */
+	u_char seqbuf[16]; /* need a unique seqbuf for each job */
+	struct chachapoly_ctx *ctx; /* and its own cipher ctx */
+	int free_ctx; /* do we need to free this ctx when asked? */
+} chachajob;
 
 void *thpool = NULL;
-#define MAX_THREADS 12
-struct chachathread thread[MAX_THREADS];
+#define MAX_JOBS 12
+struct chachajob ccjob[MAX_JOBS];
 
 struct chachapoly_ctx *
 chachapoly_new(const u_char *key, u_int keylen)
@@ -83,9 +84,9 @@ chachapoly_new(const u_char *key, u_int keylen)
 		goto fail;
 	if (EVP_CIPHER_CTX_iv_length(ctx->header_evp) != 16)
 		goto fail;
-	ctx->key = key;
-	ctx->keylen = keylen;
-	ctx->reset = 1;
+	ctx->key = key;       /* we need to get the key to the thread ctxs so */
+	ctx->keylen = keylen; /* we do it this way don't know how I feel about it */ 
+	ctx->reset = 1;       /* it's just a pointer but still */
 	return ctx;
 fail:
 	chachapoly_free(ctx);
@@ -100,11 +101,23 @@ chachapoly_free(struct chachapoly_ctx *cpctx)
 	EVP_CIPHER_CTX_free(cpctx->main_evp);
 	EVP_CIPHER_CTX_free(cpctx->header_evp);
 	freezero(cpctx, sizeof(*cpctx));
+	/* we want to free the job ctxs but only 
+	 * if they've been instantiated. This doesn't happen
+	 * with each chachapoly_free() call so we track it 
+	 * with the free_ctx flag */
+	for (int i = 0; i < MAX_JOBS; i++) {
+		if (ccjob[i].free_ctx == 1) {
+			EVP_CIPHER_CTX_free(ccjob[i].ctx->main_evp);
+			EVP_CIPHER_CTX_free(ccjob[i].ctx->header_evp);
+			freezero(ccjob[i].ctx, sizeof(*cpctx));
+			ccjob[i].free_ctx = 0;
+		}
+	}
 }
 
 /* threaded function */
-void *chachapoly_thread_work(void *thread) {
-	struct chachathread *lt = (struct chachathread *)thread;
+void *chachapoly_thread_work(void *job) {
+	struct chachajob *lt = (struct chachajob *)job;
 	if (!EVP_CipherInit(lt->ctx->main_evp, NULL, NULL, lt->seqbuf, 1) ||
 	    EVP_Cipher(lt->ctx->main_evp, lt->dest + lt->offset,
 		       lt->src + lt->offset, lt->len) < 0)
@@ -185,38 +198,39 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 		}
 
 		/* when ctx is reset with a new key we need to
-		 * reinit the ctxs we are using in the threads
+		 * reinit the ctxs we are using in the jobs
 		 * NB: CTX reset is true when we first need to
 		 * init these.
 		 */
 		if (ctx->reset) {
-			for (int j = 0; j < MAX_THREADS; j++) {
-				thread[j].ctx = chachapoly_new(ctx->key, ctx->keylen);
+			for (int j = 0; j < MAX_JOBS; j++) {
+				ccjob[j].ctx = chachapoly_new(ctx->key, ctx->keylen);
+				ccjob[j].free_ctx = 1;
 				/* init seqbuf to 0 */
-				memset(thread[j].seqbuf, 0, sizeof(seqbuf));
+				memset(ccjob[j].seqbuf, 0, sizeof(seqbuf));
 			}
 			ctx->reset = 0;
 		}
 
 		while (bufptr < len) {
-			POKE_U64(thread[i].seqbuf + 8, seqnr);
-			POKE_U32_LITTLE(thread[i].seqbuf, (bufptr/64) + 1);
-			thread[i].offset = aadlen + bufptr;
+			POKE_U64(ccjob[i].seqbuf + 8, seqnr);
+			POKE_U32_LITTLE(ccjob[i].seqbuf, (bufptr/64) + 1);
+			ccjob[i].offset = aadlen + bufptr;
 			if ((len - bufptr) >= chunk) {
-				thread[i].len = chunk;
+				ccjob[i].len = chunk;
 				bufptr += chunk;
 			} else {
-				thread[i].len = len-bufptr;
+				ccjob[i].len = len-bufptr;
 				bufptr = len;
 			}
-			thread[i].src = src;
-			thread[i].dest = dest;
-			pool_enqueue(thpool, &thread[i]);
+			ccjob[i].src = src;
+			ccjob[i].dest = dest;
+			pool_enqueue(thpool, &ccjob[i]);
 			i++;
 			/* somehow the number of chunks exceeded the number of 
 			 * available jobs for the queue. Increase the size of the
-			 * chunk or MAX_THREADS */
-			if (i >= MAX_THREADS) {
+			 * chunk or MAX_JOBS */
+			if (i >= MAX_JOBS) {
 				fatal("Threaded chacha tried to spawn too many jobs\n");
 			}
 		}
