@@ -27,7 +27,7 @@ void * pool_start(void * (*thread_func)(void *), unsigned int threads);
  * \param arg The argument to pass to the thread worker function.
  * \param free If true, the argument will be freed after the task has completed.
  */
-void pool_enqueue(void *pool, void *arg, char free);
+void pool_enqueue(void *pool, void *arg);
 
 /** 
  * Returns a count of in process and outstanding jobs

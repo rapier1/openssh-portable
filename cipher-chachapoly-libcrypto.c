@@ -181,7 +181,7 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 		int i = 0; // iterator
 
 		if (thpool == NULL) {
-			thpool = pool_start(chachapoly_thread_work, 2);
+			thpool = pool_start(chachapoly_thread_work, 4);
 		}
 
 		/* when ctx is reset with a new key we need to
@@ -196,7 +196,6 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 				memset(thread[j].seqbuf, 0, sizeof(seqbuf));
 			}
 			ctx->reset = 0;
-			fprintf(stderr, "ctx init\n");
 		}
 
 		while (bufptr < len) {
@@ -212,10 +211,13 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 			}
 			thread[i].src = src;
 			thread[i].dest = dest;
-			pool_enqueue(thpool, &thread[i], 0);
+			pool_enqueue(thpool, &thread[i]);
 			i++;
+			/* somehow the number of chunks exceeded the number of 
+			 * available jobs for the queue. Increase the size of the
+			 * chunk or MAX_THREADS */
 			if (i >= MAX_THREADS) {
-				/* something should happen here */
+				fatal("Threaded chacha tried to spawn too many jobs\n");
 			}
 		}
 		while (pool_count(thpool)) {

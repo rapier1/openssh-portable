@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE /* activate extra prototypes for glibc */
+#endif
+
 #include "pthread_pool.h"
 #include <pthread.h>
 #include <stdlib.h>
@@ -5,7 +9,6 @@
 
 struct pool_queue {
 	void *arg;
-	char free;
 	struct pool_queue *next;
 };
 
@@ -25,7 +28,7 @@ void * pool_start(void * (*thread_func)(void *), unsigned int threads) {
 	struct pool *p = (struct pool *) malloc(sizeof(struct pool) + (threads-1) * sizeof(pthread_t));
 	u_int i;
 
-#if defined PTHREAD_MUTEX_ADAPTIVE_NP
+#ifdef _GNU_SOURCE
 	pthread_mutexattr_t attr;
 	pthread_mutexattr_init(&attr);
 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ADAPTIVE_NP);
@@ -46,12 +49,11 @@ void * pool_start(void * (*thread_func)(void *), unsigned int threads) {
 	return p;
 }
 
-void pool_enqueue(void *pool, void *arg, char free) {
+void pool_enqueue(void *pool, void *arg) {
 	struct pool *p = (struct pool *) pool;
 	struct pool_queue *q = (struct pool_queue *) malloc(sizeof(struct pool_queue));
 	q->arg = arg;
 	q->next = NULL;
-	q->free = free;
 
 	pthread_mutex_lock(&p->q_mtx);
 	if (p->end != NULL) p->end->next = q;
