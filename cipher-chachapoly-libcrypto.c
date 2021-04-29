@@ -85,7 +85,7 @@ chachapoly_new(const u_char *key, u_int keylen)
 	if (EVP_CIPHER_CTX_iv_length(ctx->header_evp) != 16)
 		goto fail;
 	ctx->key = key;       /* we need to get the key to the thread ctxs so */
-	ctx->keylen = keylen; /* we do it this way don't know how I feel about it */ 
+	ctx->keylen = keylen; /* we do it this way don't know how I feel about it */
 	ctx->reset = 1;       /* it's just a pointer but still */
 	return ctx;
 fail:
@@ -101,9 +101,9 @@ chachapoly_free(struct chachapoly_ctx *cpctx)
 	EVP_CIPHER_CTX_free(cpctx->main_evp);
 	EVP_CIPHER_CTX_free(cpctx->header_evp);
 	freezero(cpctx, sizeof(*cpctx));
-	/* we want to free the job ctxs but only 
+	/* we want to free the job ctxs but only
 	 * if they've been instantiated. This doesn't happen
-	 * with each chachapoly_free() call so we track it 
+	 * with each chachapoly_free() call so we track it
 	 * with the free_ctx flag */
 	for (int i = 0; i < MAX_JOBS; i++) {
 		if (ccjob[i].free_ctx == 1) {
@@ -146,7 +146,8 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 	int r = SSH_ERR_INTERNAL_ERROR;
 	u_char expected_tag[POLY1305_TAGLEN], poly_key[POLY1305_KEYLEN];
 	u_int chunk = 64*64; /* cc20 block size is 64 bytes */
-
+	                     /* expected len is either 16400 or 32786 */
+	                     /* so 4k should be about right */
 	/*
 	 * Run ChaCha20 once to generate the Poly1305 key. The IV is the
 	 * packet sequence number.
@@ -190,8 +191,8 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 
 	if (len >= chunk) { /* if the length of the inbound datagram is less than */
 		            /* the chunk size don't bother with threading. */
-		u_int bufptr = 0; // track where we are in the buffer
-		int i = 0; // iterator
+		u_int bufptr = 0; /* tracks where we are in the buffer */
+		int i = 0;
 
 		if (thpool == NULL) {
 			thpool = pool_start(chachapoly_thread_work, 4);
@@ -212,9 +213,17 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 			ctx->reset = 0;
 		}
 
+		/* this actually determines the length of each chunk
+		 * and the offset for the jobs. We pass pointers to
+		 * src and dest. The threadpool slots everything in where
+		 * it needs to go using the length and offset */
 		while (bufptr < len) {
+			/* insert the sequence number and block counter
+			 * into the sequence buffer*/
 			POKE_U64(ccjob[i].seqbuf + 8, seqnr);
 			POKE_U32_LITTLE(ccjob[i].seqbuf, (bufptr/64) + 1);
+			/* the offset is where we read the data from src and
+			 * where we put it into dest */
 			ccjob[i].offset = aadlen + bufptr;
 			if ((len - bufptr) >= chunk) {
 				ccjob[i].len = chunk;
@@ -227,7 +236,7 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 			ccjob[i].dest = dest;
 			pool_enqueue(thpool, &ccjob[i]);
 			i++;
-			/* somehow the number of chunks exceeded the number of 
+			/* somehow the number of chunks exceeded the number of
 			 * available jobs for the queue. Increase the size of the
 			 * chunk or MAX_JOBS */
 			if (i >= MAX_JOBS) {
@@ -235,7 +244,7 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 			}
 		}
 		while (pool_count(thpool)) {
-			/* sit and spin */
+			/* sit and spin while we wait for the jobs to finish*/
 		}
 	} else { /*non threaded cc20 method*/
 		seqbuf[0] = 1; // set the cc20 sequence counter to 1
