@@ -28,6 +28,7 @@ void * pool_start(void * (*thread_func)(void *), unsigned int threads) {
 	struct pool *p = (struct pool *) malloc(sizeof(struct pool) + (threads-1) * sizeof(pthread_t));
 	u_int i;
 
+/*if we have adaptive mutex then try to use it */
 #ifdef _GNU_SOURCE
 	pthread_mutexattr_t attr;
 	pthread_mutexattr_init(&attr);
@@ -36,14 +37,21 @@ void * pool_start(void * (*thread_func)(void *), unsigned int threads) {
 #else
 	pthread_mutex_init(&p->q_mtx, NULL);
 #endif
+
+	/* we don't need joinable threads for this */
+	pthread_attr_t detached_attr;
+	pthread_attr_init(&detached_attr);
+	pthread_attr_setdetachstate(&detached_attr, PTHREAD_CREATE_DETACHED);
+
 	pthread_cond_init(&p->q_cnd, NULL);
+	
 	p->fn = thread_func;
 	p->remaining = 0;
 	p->end = NULL;
 	p->q = NULL;
 
 	for (i = 0; i < threads; i++) {
-		pthread_create(&p->threads[i], NULL, &thread, p);
+		pthread_create(&p->threads[i], &detached_attr, &thread, p);
 	}
 
 	return p;
