@@ -21,7 +21,8 @@
 #include "openbsd-compat/openssl-compat.h"
 #endif
 
-#if !defined(HAVE_EVP_CHACHA20) || defined(HAVE_BROKEN_CHACHA20)
+//#if !defined(HAVE_EVP_CHACHA20) || defined(HAVE_BROKEN_CHACHA20)
+#if defined(HAVE_EVP_CHACHA20) || defined(HAVE_BROKEN_CHACHA20)
 
 #include <sys/types.h>
 #include <stdarg.h> /* needed for log.h */
@@ -46,8 +47,8 @@ chachapoly_new(const u_char *key, u_int keylen)
 		return NULL;
 	if ((ctx = calloc(1, sizeof(*ctx))) == NULL)
 		return NULL;
-	chacha_keysetup(&ctx->main_ctx, key, 256);
-	chacha_keysetup(&ctx->header_ctx, key + 32, 256);
+	chacha_keysetup(&ctx->main_ctx, key);
+	chacha_keysetup(&ctx->header_ctx, key + 32);
 	return ctx;
 }
 
@@ -104,9 +105,14 @@ chachapoly_crypt(struct chachapoly_ctx *ctx, u_int seqnr, u_char *dest,
 
 	/* Set Chacha's block counter to 1 */
 	chacha_ivsetup(&ctx->main_ctx, seqbuf, one);
-	chacha_encrypt_bytes(&ctx->main_ctx, src + aadlen,
-	    dest + aadlen, len);
-
+	//if (len > 0) {
+		chacha_encrypt_bytes_omp(&ctx->main_ctx, src + aadlen,
+					 dest + aadlen, len);
+		//} else {
+		//chacha_encrypt_bytes(&ctx->main_ctx, src + aadlen,
+		//		     dest + aadlen, len);
+		//}
+	
 	/* If encrypting, calculate and append tag */
 	if (do_encrypt) {
 		poly1305_auth(dest + aadlen + len, dest, aadlen + len,

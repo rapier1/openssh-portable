@@ -19,7 +19,7 @@
 #define CHACHA_POLY_AEAD_H
 
 #include <sys/types.h>
-#include "chacha.h"
+#include "boring-chacha.h"
 #include "poly1305.h"
 
 #define CHACHA_KEYLEN	32 /* Only 256 bit keys used here */
