@@ -71,6 +71,7 @@ u_int	 cipher_authlen(const struct sshcipher *);
 u_int	 cipher_ivlen(const struct sshcipher *);
 u_int	 cipher_is_cbc(const struct sshcipher *);
 void	 cipher_reset_multithreaded(void);
+void     cipher_set_auth_state(int);
 const char *cipher_ctx_name(const struct sshcipher_ctx *);
 
 const char *cipher_ctx_name(const struct sshcipher_ctx *);

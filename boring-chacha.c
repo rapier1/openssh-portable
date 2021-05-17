@@ -163,10 +163,14 @@ static void chacha_core(uint8_t output[64], struct chacha_ctx *cc_ctx) {
 	U32TO8_LITTLE(output + 60, x[15]);
 }
 
-static void chacha_core_omp(uint8_t output[64], uint32_t *input) {
+static void chacha_core_omp(uint32_t *input, const uint8_t *in, uint8_t *out, int todo) {
 	uint32_t x[16];
+	uint8_t output[64];
 	int i;
-	uint32_t step = (input[12] - 1) * 64;
+	int offset = 0;
+	int step = (input[12] - 1) * 64; /* block counter - 1 gives us the correct
+					  * position in the pointers to the input
+					  * and output buffers */
 	
 	x[0] = input[0];
 	x[1] = input[1];
@@ -216,22 +220,27 @@ static void chacha_core_omp(uint8_t output[64], uint32_t *input) {
 	x[14] += input[14];
 	x[15] += input[15];
 	
-	U32TO8_LITTLE(output + step, x[0]);
-	U32TO8_LITTLE(output + 4 + step, x[1]);
-	U32TO8_LITTLE(output + 8 + step, x[2]);
-	U32TO8_LITTLE(output + 12 + step, x[3]);
-	U32TO8_LITTLE(output + 16 + step, x[4]);
-	U32TO8_LITTLE(output + 20 + step, x[5]);
-	U32TO8_LITTLE(output + 24 + step, x[6]);
-	U32TO8_LITTLE(output + 28 + step, x[7]);
-	U32TO8_LITTLE(output + 32 + step, x[8]);
-	U32TO8_LITTLE(output + 36 + step, x[9]);
-	U32TO8_LITTLE(output + 40 + step, x[10]);
-	U32TO8_LITTLE(output + 44 + step, x[11]);
-	U32TO8_LITTLE(output + 48 + step, x[12]);
-	U32TO8_LITTLE(output + 52 + step, x[13]);
-	U32TO8_LITTLE(output + 56 + step, x[14]);
-	U32TO8_LITTLE(output + 60 + step, x[15]);
+	U32TO8_LITTLE(output, x[0]);
+	U32TO8_LITTLE(output + 4, x[1]);
+	U32TO8_LITTLE(output + 8, x[2]);
+	U32TO8_LITTLE(output + 12, x[3]);
+	U32TO8_LITTLE(output + 16, x[4]);
+	U32TO8_LITTLE(output + 20, x[5]);
+	U32TO8_LITTLE(output + 24, x[6]);
+	U32TO8_LITTLE(output + 28, x[7]);
+	U32TO8_LITTLE(output + 32, x[8]);
+	U32TO8_LITTLE(output + 36, x[9]);
+	U32TO8_LITTLE(output + 40, x[10]);
+	U32TO8_LITTLE(output + 44, x[11]);
+	U32TO8_LITTLE(output + 48, x[12]);
+	U32TO8_LITTLE(output + 52, x[13]);
+	U32TO8_LITTLE(output + 56, x[14]);
+	U32TO8_LITTLE(output + 60, x[15]);
+
+       	for (int k = 0; k < todo; k++) {
+		offset = k + step;
+		out[offset] = in[offset] ^ output[k];
+	}
 }
 
 /* take an input pointer (in) of in_len bytes and perform chacha_core on it
@@ -278,43 +287,43 @@ void chacha_encrypt_bytes(struct chacha_ctx *cc_ctx, const uint8_t *in, uint8_t 
 void chacha_encrypt_bytes_omp(struct chacha_ctx *cc_ctx, const uint8_t *in, uint8_t *out, size_t in_len)
 {
 	assert(!buffers_alias(out, in_len, in, in_len) || in == out);
-	uint8_t buf[65536];
-	int block_size = 64;
 	size_t i;
 	uint32_t cc_ctx_cpy[16];
 	
-	/* this is where the magic happens */
-#pragma omp parallel shared (buf, block_size, i) private (cc_ctx_cpy) num_threads(4)
-	{
-		/* copy the context as we can't share it 
-		 * across threads */
-		cc_ctx_cpy[0] = cc_ctx->input[0];
-		cc_ctx_cpy[1] = cc_ctx->input[1];
-		cc_ctx_cpy[2] = cc_ctx->input[2];
-		cc_ctx_cpy[3] = cc_ctx->input[3];
-		cc_ctx_cpy[4] = cc_ctx->input[4];
-		cc_ctx_cpy[5] = cc_ctx->input[5];
-		cc_ctx_cpy[6] = cc_ctx->input[6];
-		cc_ctx_cpy[7] = cc_ctx->input[7];
-		cc_ctx_cpy[8] = cc_ctx->input[8];
-		cc_ctx_cpy[9] = cc_ctx->input[9];
-		cc_ctx_cpy[10] = cc_ctx->input[10];
-		cc_ctx_cpy[11] = cc_ctx->input[11];
-		cc_ctx_cpy[12] = cc_ctx->input[12];
-		cc_ctx_cpy[13] = cc_ctx->input[13];
-		cc_ctx_cpy[14] = cc_ctx->input[14];
-		cc_ctx_cpy[15] = cc_ctx->input[15];
-		for (i = 0; i < in_len; i += block_size) {
-			/* set the block counter */
-			cc_ctx_cpy[12] = (i/block_size) + 1;
-			/* get the key stream */
-			chacha_core_omp(buf, cc_ctx_cpy);
-		}
-	}
+	/* we need to make a copy of the cipher context */ 
+	cc_ctx_cpy[0] = cc_ctx->input[0];
+	cc_ctx_cpy[1] = cc_ctx->input[1];
+	cc_ctx_cpy[2] = cc_ctx->input[2];
+	cc_ctx_cpy[3] = cc_ctx->input[3];
+	cc_ctx_cpy[4] = cc_ctx->input[4];
+	cc_ctx_cpy[5] = cc_ctx->input[5];
+	cc_ctx_cpy[6] = cc_ctx->input[6];
+	cc_ctx_cpy[7] = cc_ctx->input[7];
+	cc_ctx_cpy[8] = cc_ctx->input[8];
+	cc_ctx_cpy[9] = cc_ctx->input[9];
+	cc_ctx_cpy[10] = cc_ctx->input[10];
+	cc_ctx_cpy[11] = cc_ctx->input[11];
+	cc_ctx_cpy[12] = cc_ctx->input[12];
+	cc_ctx_cpy[13] = cc_ctx->input[13];
+	cc_ctx_cpy[14] = cc_ctx->input[14];
+	cc_ctx_cpy[15] = cc_ctx->input[15];
 	
-	/* XOR the bytes 1 by 1 against the buffer returned by chacha core */
-	/* can't unroll this as we don't know the size of todo */
-	for (i = 0; i <= in_len; i++) {
-			out[i] = in[i] ^ buf[i];
+	/* this is where the magic happens */
+#pragma omp parallel for num_threads(4)
+	/* copy the context as we can't share it 
+	 * across threads */
+	for (i = 0; i < in_len; i += 64) {
+		int block_size = 64;
+		int todo = 0;
+		int counter = i/block_size + 1;
+		int remaining = in_len - i;
+		if (remaining > block_size) {
+			todo = block_size;
+		} else {
+			todo = remaining;
+		}
+		/* set the block counter */
+		cc_ctx_cpy[12] = counter;
+		chacha_core_omp(cc_ctx_cpy, in, out, todo);
 	}
 }

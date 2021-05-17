@@ -454,7 +454,7 @@ ssh_userauth2(struct ssh *ssh, const char *local_user,
 {
 	Authctxt authctxt;
 	int r;
-
+	
 	if (options.challenge_response_authentication)
 		options.kbd_interactive_authentication = 1;
 	if (options.preferred_authentications == NULL)
@@ -503,6 +503,11 @@ ssh_userauth2(struct ssh *ssh, const char *local_user,
 	if (!authctxt.success)
 		fatal("Authentication failed.");
 
+	/* we have authenticated successfully 
+	 * we want to communicate that to the threaded chacha20 cipher
+	 */
+	cipher_set_auth_state(1);
+
 	/*
 	 * If the user wants to use the none cipher and/or none mac, do it post authentication
 	 * and only if the right conditions are met -- both of the NONE commands
@@ -540,7 +545,7 @@ ssh_userauth2(struct ssh *ssh, const char *local_user,
 		 */
 	  const void *cc = ssh_packet_get_send_context(ssh);
 		
-		/* only do this for the ctr cipher. otherwise gcm mode breaks. Don't know why though */
+		/* only do this for the ctr cipher. */
 		if (strstr(cipher_ctx_name(cc), "ctr")) {
 			debug("Single to Multithread CTR cipher swap - client request");
 			cipher_reset_multithreaded();
