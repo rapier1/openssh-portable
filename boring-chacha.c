@@ -170,8 +170,7 @@ static void chacha_core_omp(uint32_t *input, const uint8_t *in, uint8_t *out, in
 	int offset = 0;
 	int step = (input[12] - 1) * 64; /* block counter - 1 gives us the correct
 					  * position in the pointers to the input
-					  * and output buffers */
-	
+					  * and output buffers */	
 	x[0] = input[0];
 	x[1] = input[1];
 	x[2] = input[2];

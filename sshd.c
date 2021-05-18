@@ -590,6 +590,9 @@ privsep_postauth(struct ssh *ssh, Authctxt *authctxt)
 	 * this information is not part of the key state.
 	 */
 	ssh_packet_set_authenticated(ssh);
+
+	/* tell the CC20 cipher that we are post auth */
+	cipher_set_auth_state(1);
 }
 
 static void
