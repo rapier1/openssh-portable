@@ -55,6 +55,10 @@
 #define EVP_CIPHER_CTX void
 #endif
 
+/* set the current authorization state (0 for pre 1 for post) */
+/* to 0. For use by the threaded cc20 cipher */
+int auth_state = 0;
+
 struct sshcipher_ctx {
 	int	plaintext;
 	int	encrypt;
@@ -176,6 +180,15 @@ u_int
 cipher_authlen(const struct sshcipher *c)
 {
 	return (c->auth_len);
+}
+
+/* this allows us to set the authorization state to 
+ * 0 or 1. 0 is preauth and the default and 1 is post auth
+ * we are using this as a proxy to indicate if we are in the 
+ * privsep or not. This value is exported to the threaded
+ * chacha20 code */
+void cipher_set_auth_state(int state) {
+	auth_state = state;
 }
 
 u_int
