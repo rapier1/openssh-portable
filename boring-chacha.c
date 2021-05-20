@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <omp.h>
+#include <unistd.h>
 #include "boring-chacha.h"
 
 #define U8TO32_LITTLE(p)			      \
@@ -56,6 +57,29 @@ static inline int buffers_alias(const uint8_t *a, size_t a_len,
 		(p)[2] = (v >> 16) & 0xff;	\
 		(p)[3] = (v >> 24) & 0xff;	\
 	}
+
+/* what I would like to do is see if I can get the
+ * quarterround process written in tighter asm code.
+ * I am not the person to do that. :|
+ * I'm leaving this here as a reminder to try it later
+ * It doesn't crash but it doesn't actually transform the data
+ * pretty sure I need to mov the results to the right
+ * register but I'm hittng a brick wall */
+/* #define QR(a,b,c,d)				\ */
+/* 	__asm__(				\ */
+/* 	"add %rdi, %rsi\n"			\ */
+/* 	"xor %rcx, %rdi\n"			\ */
+/* 	"rol $16, %rcx\n"			\ */
+/* 	"add %rdx, %rcx\n"			\ */
+/* 	"xor %rsi, %rdx\n"			\ */
+/* 	"rol $12, %rsi\n"			\ */
+/* 	"add %rdi, %rsi\n"			\ */
+/* 	"xor %rcx, %rdi\n"			\ */
+/* 	"rol $8, %rcx\n"			\ */
+/* 	"add %rdx, %rcx\n"			\ */
+/* 	"xor %rsi, %rdx\n"			\ */
+/* 	"rol $7, %rsi\n"			\ */
+/* ); */
 
 
 /* always expecting to get a 256 bit key */
@@ -96,7 +120,7 @@ chacha_ivsetup(struct chacha_ctx *x, const uint8_t *nonce, const uint8_t *counte
 static void chacha_core(uint8_t output[64], struct chacha_ctx *cc_ctx) {
 	uint32_t x[16];
 	int i;
-	
+
 	x[0] = cc_ctx->input[0];
 	x[1] = cc_ctx->input[1];
 	x[2] = cc_ctx->input[2];
@@ -113,7 +137,7 @@ static void chacha_core(uint8_t output[64], struct chacha_ctx *cc_ctx) {
 	x[13] = cc_ctx->input[13];
 	x[14] = cc_ctx->input[14];
 	x[15] = cc_ctx->input[15];
-	
+
 	for (i = 20; i > 0; i -= 2) {
 		QUARTERROUND(0, 4, 8, 12);
 		QUARTERROUND(1, 5, 9, 13);
@@ -124,7 +148,7 @@ static void chacha_core(uint8_t output[64], struct chacha_ctx *cc_ctx) {
 		QUARTERROUND(2, 7, 8, 13);
 		QUARTERROUND(3, 4, 9, 14);
 	}
-	
+
 	/* initially the following two sections were loops
 	 * which is easier to read but incurs overhead due to
 	 * the increment and conditional */
@@ -162,7 +186,7 @@ static void chacha_core(uint8_t output[64], struct chacha_ctx *cc_ctx) {
 	U32TO8_LITTLE(output + 56, x[14]);
 	U32TO8_LITTLE(output + 60, x[15]);
 }
-
+# pragma GCC optimize "tree-vectorize"
 static void chacha_core_omp(uint32_t *input, const uint8_t *in, uint8_t *out, int todo) {
 	uint32_t x[16];
 	uint8_t output[64];
@@ -170,7 +194,7 @@ static void chacha_core_omp(uint32_t *input, const uint8_t *in, uint8_t *out, in
 	int offset = 0;
 	int step = (input[12] - 1) * 64; /* block counter - 1 gives us the correct
 					  * position in the pointers to the input
-					  * and output buffers */	
+					  * and output buffers */
 	x[0] = input[0];
 	x[1] = input[1];
 	x[2] = input[2];
@@ -198,7 +222,7 @@ static void chacha_core_omp(uint32_t *input, const uint8_t *in, uint8_t *out, in
 		QUARTERROUND(2, 7, 8, 13);
 		QUARTERROUND(3, 4, 9, 14);
 	}
-	
+
 	/* initially the following two sections were loops
 	 * which is easier to read but incurs overhead due to
 	 * the increment and conditional */
@@ -218,7 +242,7 @@ static void chacha_core_omp(uint32_t *input, const uint8_t *in, uint8_t *out, in
 	x[13] += input[13];
 	x[14] += input[14];
 	x[15] += input[15];
-	
+
 	U32TO8_LITTLE(output, x[0]);
 	U32TO8_LITTLE(output + 4, x[1]);
 	U32TO8_LITTLE(output + 8, x[2]);
@@ -236,6 +260,7 @@ static void chacha_core_omp(uint32_t *input, const uint8_t *in, uint8_t *out, in
 	U32TO8_LITTLE(output + 56, x[14]);
 	U32TO8_LITTLE(output + 60, x[15]);
 
+	/* todo is of unknown size so we can't unroll */
        	for (int k = 0; k < todo; k++) {
 		offset = k + step;
 		out[offset] = in[offset] ^ output[k];
@@ -250,7 +275,7 @@ void chacha_encrypt_bytes(struct chacha_ctx *cc_ctx, const uint8_t *in, uint8_t 
 	assert(!buffers_alias(out, in_len, in, in_len) || in == out);
 	uint8_t buf[64];
 	size_t todo, i;
-	/* step through buffer in 64 byte chunks 
+	/* step through buffer in 64 byte chunks
 	 * decrement in_len until it reaches 0*/
 	while (in_len > 0) {
 		todo = sizeof(buf);
@@ -288,8 +313,32 @@ void chacha_encrypt_bytes_omp(struct chacha_ctx *cc_ctx, const uint8_t *in, uint
 	assert(!buffers_alias(out, in_len, in, in_len) || in == out);
 	size_t i;
 	uint32_t cc_ctx_cpy[16];
-	
-	/* we need to make a copy of the cipher context */ 
+	int cipher_threads = 4; /* use a default of 4 threads */
+
+	/* get the number of cores in the system */
+        /* divide by 2 because using too many threads
+	 * actually slows things down due to overhead
+	 */
+#ifdef __linux__
+        cipher_threads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
+#endif /*__linux__*/
+#ifdef __APPLE__
+        cipher_threads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
+#endif /*__APPLE__*/
+#ifdef __FREEBSD__
+        int req[2];
+        size_t len;
+
+        req[0] = CTL_HW;
+        req[1] = HW_NCPU;
+
+        len = sizeof(ncpu);
+        sysctl(req, 2, &cipher_threads, &len, NULL, 0);
+        cipher_threads = cipher_threads / 2;
+#endif /*__FREEBSD__*/
+
+	fprintf(stderr, "Num threads is %d", cipher_threads);
+	/* we need to make a copy of the cipher context */
 	cc_ctx_cpy[0] = cc_ctx->input[0];
 	cc_ctx_cpy[1] = cc_ctx->input[1];
 	cc_ctx_cpy[2] = cc_ctx->input[2];
@@ -306,10 +355,10 @@ void chacha_encrypt_bytes_omp(struct chacha_ctx *cc_ctx, const uint8_t *in, uint
 	cc_ctx_cpy[13] = cc_ctx->input[13];
 	cc_ctx_cpy[14] = cc_ctx->input[14];
 	cc_ctx_cpy[15] = cc_ctx->input[15];
-	
+
 	/* this is where the magic happens */
-#pragma omp parallel for num_threads(4)
-	/* copy the context as we can't share it 
+#pragma omp parallel for num_threads(cipher_threads)
+	/* copy the context as we can't share it
 	 * across threads */
 	for (i = 0; i < in_len; i += 64) {
 		int block_size = 64;
