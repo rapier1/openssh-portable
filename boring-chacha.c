@@ -31,6 +31,7 @@ static const uint8_t sigma[16] = { 'e', 'x', 'p', 'a', 'n', 'd', ' ', '3',
 	'2', '-', 'b', 'y', 't', 'e', ' ', 'k' };
 
 int got_thread_count = 0; /* flag so we only get the number of threads once*/
+int cc_threads = 4; /* use a default of 4 threads */
 
 #define ROTATE(v, n) (((v) << (n)) | ((v) >> (32 - (n))))
 
@@ -315,7 +316,6 @@ void chacha_encrypt_bytes_omp(struct chacha_ctx *cc_ctx, const uint8_t *in, uint
 	assert(!buffers_alias(out, in_len, in, in_len) || in == out);
 	size_t i;
 	uint32_t cc_ctx_cpy[16];
-	int cipher_threads = 4; /* use a default of 4 threads */
 		
 	/* get the number of cores in the system */
         /* divide by 2 because using too many threads
@@ -323,10 +323,10 @@ void chacha_encrypt_bytes_omp(struct chacha_ctx *cc_ctx, const uint8_t *in, uint
 	 */
 	if (!got_thread_count) {
 #ifdef __linux__
-		cipher_threads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
+		cc_threads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
 #endif /*__linux__*/
 #ifdef __APPLE__
-		cipher_threads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
+		cc_threads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
 #endif /*__APPLE__*/
 #ifdef __FREEBSD__
 		int req[2];
@@ -336,8 +336,8 @@ void chacha_encrypt_bytes_omp(struct chacha_ctx *cc_ctx, const uint8_t *in, uint
 		req[1] = HW_NCPU;
 		
 		len = sizeof(ncpu);
-		sysctl(req, 2, &cipher_threads, &len, NULL, 0);
-		cipher_threads = cipher_threads / 2;
+		sysctl(req, 2, &cc_threads, &len, NULL, 0);
+		cc_threads = cc_threads / 2;
 #endif /*__FREEBSD__*/
 		got_thread_count = 1;
 	}
@@ -360,7 +360,7 @@ void chacha_encrypt_bytes_omp(struct chacha_ctx *cc_ctx, const uint8_t *in, uint
 	cc_ctx_cpy[15] = cc_ctx->input[15];
 
 	/* this is where the magic happens */
-#pragma omp parallel for num_threads(cipher_threads)
+#pragma omp parallel for num_threads(cc_threads)
 	/* copy the context as we can't share it
 	 * across threads */
 	for (i = 0; i < in_len; i += 64) {
