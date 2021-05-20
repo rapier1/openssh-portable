@@ -30,6 +30,8 @@
 static const uint8_t sigma[16] = { 'e', 'x', 'p', 'a', 'n', 'd', ' ', '3',
 	'2', '-', 'b', 'y', 't', 'e', ' ', 'k' };
 
+int got_thread_count = 0; /* flag so we only get the number of threads once*/
+
 #define ROTATE(v, n) (((v) << (n)) | ((v) >> (32 - (n))))
 
 // QUARTERROUND updates a, b, c, d with a ChaCha "quarter" round.
@@ -314,31 +316,32 @@ void chacha_encrypt_bytes_omp(struct chacha_ctx *cc_ctx, const uint8_t *in, uint
 	size_t i;
 	uint32_t cc_ctx_cpy[16];
 	int cipher_threads = 4; /* use a default of 4 threads */
-
+		
 	/* get the number of cores in the system */
         /* divide by 2 because using too many threads
 	 * actually slows things down due to overhead
 	 */
+	if (!got_thread_count) {
 #ifdef __linux__
-        cipher_threads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
+		cipher_threads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
 #endif /*__linux__*/
 #ifdef __APPLE__
-        cipher_threads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
+		cipher_threads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
 #endif /*__APPLE__*/
 #ifdef __FREEBSD__
-        int req[2];
-        size_t len;
-
-        req[0] = CTL_HW;
-        req[1] = HW_NCPU;
-
-        len = sizeof(ncpu);
-        sysctl(req, 2, &cipher_threads, &len, NULL, 0);
-        cipher_threads = cipher_threads / 2;
+		int req[2];
+		size_t len;
+		
+		req[0] = CTL_HW;
+		req[1] = HW_NCPU;
+		
+		len = sizeof(ncpu);
+		sysctl(req, 2, &cipher_threads, &len, NULL, 0);
+		cipher_threads = cipher_threads / 2;
 #endif /*__FREEBSD__*/
-
-	fprintf(stderr, "Num threads is %d", cipher_threads);
-	/* we need to make a copy of the cipher context */
+		got_thread_count = 1;
+	}
+		/* we need to make a copy of the cipher context */
 	cc_ctx_cpy[0] = cc_ctx->input[0];
 	cc_ctx_cpy[1] = cc_ctx->input[1];
 	cc_ctx_cpy[2] = cc_ctx->input[2];
