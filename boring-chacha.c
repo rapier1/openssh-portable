@@ -21,7 +21,10 @@
 #include <omp.h>
 #include <unistd.h>
 #include "boring-chacha.h"
+#include "log.h"
 
+
+#define CC_THREADS_MAX 8
 #define U8TO32_LITTLE(p)			      \
 	(((uint32_t)((p)[0])) | ((uint32_t)((p)[1]) << 8) |	\
 	 ((uint32_t)((p)[2]) << 16) | ((uint32_t)((p)[3]) << 24))
@@ -340,6 +343,13 @@ void chacha_encrypt_bytes_omp(struct chacha_ctx *cc_ctx, const uint8_t *in, uint
 		cc_threads = cc_threads / 2;
 #endif /*__FREEBSD__*/
 		got_thread_count = 1;
+		/* on some systems the value of cc_threads can be 
+		 * absurdly high (like if you have 64 cores and 128 threads
+		 * this actually gets in the way so tamp it down to a 
+		 * max of CC_THREADS_MAX (currently 8) */
+		if (cc_threads > CC_THREADS_MAX)
+			cc_threads = CC_THREADS_MAX;
+		debug ("Set cc_threads to %d", cc_threads);
 	}
 		/* we need to make a copy of the cipher context */
 	cc_ctx_cpy[0] = cc_ctx->input[0];
