@@ -25,7 +25,9 @@
 
 
 #define CC_THREADS_MAX 8
-#define U8TO32_LITTLE(p)			      \
+#define CC_BLOCK_SIZE 64
+
+#define U8TO32_LITTLE(p)					\
 	(((uint32_t)((p)[0])) | ((uint32_t)((p)[1]) << 8) |	\
 	 ((uint32_t)((p)[2]) << 16) | ((uint32_t)((p)[3]) << 24))
 
@@ -192,13 +194,13 @@ static void chacha_core(uint8_t output[64], struct chacha_ctx *cc_ctx) {
 	U32TO8_LITTLE(output + 56, x[14]);
 	U32TO8_LITTLE(output + 60, x[15]);
 }
-# pragma GCC optimize "tree-vectorize"
-static void chacha_core_omp(uint32_t *input, const uint8_t *in, uint8_t *out, int todo) {
+
+static void chacha_core_omp(uint32_t *input, const uint8_t *in, uint8_t *out, int todo, uint32_t counter) {
 	uint32_t x[16];
 	uint8_t output[64];
 	int i;
 	int offset = 0;
-	int step = (input[12] - 1) * 64; /* block counter - 1 gives us the correct
+	int step = (counter - 1) * 64; /* block counter - 1 gives us the correct
 					  * position in the pointers to the input
 					  * and output buffers */
 	x[0] = input[0];
@@ -213,7 +215,7 @@ static void chacha_core_omp(uint32_t *input, const uint8_t *in, uint8_t *out, in
 	x[9] = input[9];
 	x[10] = input[10];
 	x[11] = input[11];
-	x[12] = input[12];
+	x[12] = counter;
 	x[13] = input[13];
 	x[14] = input[14];
 	x[15] = input[15];
@@ -244,7 +246,7 @@ static void chacha_core_omp(uint32_t *input, const uint8_t *in, uint8_t *out, in
 	x[9] += input[9];
 	x[10] += input[10];
 	x[11] += input[11];
-	x[12] += input[12];
+	x[12] += counter; 
 	x[13] += input[13];
 	x[14] += input[14];
 	x[15] += input[15];
@@ -351,7 +353,13 @@ void chacha_encrypt_bytes_omp(struct chacha_ctx *cc_ctx, const uint8_t *in, uint
 			cc_threads = CC_THREADS_MAX;
 		debug ("Set cc_threads to %d", cc_threads);
 	}
-		/* we need to make a copy of the cipher context */
+	
+	/* copy the context as we can't share it
+	 * across threads. However, the block counter
+	 * (input[12]) is ignored and we use a private 
+	 * var called counter instead. This reduces 
+	 * the need to modify a shared variable across
+	 * threads */
 	cc_ctx_cpy[0] = cc_ctx->input[0];
 	cc_ctx_cpy[1] = cc_ctx->input[1];
 	cc_ctx_cpy[2] = cc_ctx->input[2];
@@ -371,20 +379,14 @@ void chacha_encrypt_bytes_omp(struct chacha_ctx *cc_ctx, const uint8_t *in, uint
 
 	/* this is where the magic happens */
 #pragma omp parallel for num_threads(cc_threads)
-	/* copy the context as we can't share it
-	 * across threads */
-	for (i = 0; i < in_len; i += 64) {
-		int block_size = 64;
+	for (i = 0; i < in_len; i += CC_BLOCK_SIZE) {
 		int todo = 0;
-		int counter = i/block_size + 1;
-		int remaining = in_len - i;
-		if (remaining > block_size) {
-			todo = block_size;
+		uint32_t counter = i/CC_BLOCK_SIZE + 1;
+		if (in_len - i  > CC_BLOCK_SIZE) {
+			todo = CC_BLOCK_SIZE;
 		} else {
-			todo = remaining;
+			todo = in_len - i;
 		}
-		/* set the block counter */
-		cc_ctx_cpy[12] = counter;
-		chacha_core_omp(cc_ctx_cpy, in, out, todo);
+		chacha_core_omp(cc_ctx_cpy, in, out, todo, counter);
 	}
 }
